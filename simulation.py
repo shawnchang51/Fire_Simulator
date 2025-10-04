@@ -9,6 +9,7 @@ import json
 from fire_model_float import create_fire_model
 from fire_monitor import FireMonitor
 from snapshot_ainmator import RealtimeGridAnimator
+from datetime import datetime
 
 try:
     from pygame_visualizer import EvacuationVisualizer
@@ -492,6 +493,9 @@ class EvacuationSimulation():
 
                 # For demonstration, we will just print the status
                 print(f"Status: {status}")
+
+        self.monitor.save_monitoring_data(f"./data/evacuation_simulation_data_{datetime.now().strftime('%Y%m%d_%H%M')}.json")
+        self.monitor.export_csv_data(f"./data/evacuation_simulation_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
 
         if visualizer:
             visualizer.close()

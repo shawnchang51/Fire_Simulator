@@ -1,2 +1,4 @@
 /.claude
 /MATLAB_VISUALIZER_README.md
+**/__pycache__/
+*.pyc

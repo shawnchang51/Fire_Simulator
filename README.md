@@ -33,25 +33,6 @@ pip install -r requirements.txt
 pip install pygame
 ```
 
-## Project Structure
-
-```
-Fire_Simulator/
-├── simulation.py              # Main simulation engine
-├── fire_model_float.py        # Fire spread model
-├── fire_monitor.py            # Fire monitoring system
-├── pygame_visualizer.py       # Pygame-based visualization
-├── visual_configurator.py     # Visual configuration tools
-├── snapshot_ainmator.py       # Real-time grid animation
-├── example_configuration.json # Sample configuration file
-├── d_star_lite/               # D* Lite pathfinding implementation
-│   ├── d_star_lite.py
-│   ├── grid.py
-│   ├── graph.py
-│   └── utils.py
-└── requirements.txt
-```
-
 ## Quick Start
 
 Run the simulation with default configuration:

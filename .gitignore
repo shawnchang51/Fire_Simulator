@@ -2,3 +2,6 @@
 /MATLAB_VISUALIZER_README.md
 **/__pycache__/
 *.pyc
+/data/*
+!/data/example_output.csv
+!/data/example_output.json

@@ -518,4 +518,9 @@ if __name__ == "__main__":
     config = SimulationConfig.from_json(json_config)
 
     simulation = EvacuationSimulation(config)
-    simulation.run(max_steps=500)
+    simulation.run(
+        max_steps=500, 
+        show_visualization=False, 
+        use_pygame=False, 
+        use_matlab=True
+        )

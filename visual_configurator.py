@@ -681,7 +681,7 @@ class VisualConfigurator:
         # Create options dialog
         options_window = tk.Toplevel(self.root)
         options_window.title("Simulation Options")
-        options_window.geometry("350x250")
+        options_window.geometry("350x300")
         options_window.transient(self.root)
         options_window.grab_set()
 
@@ -702,11 +702,14 @@ class VisualConfigurator:
 
         ttk.Label(frame, text="Choose visualization mode:").pack(pady=(0, 20))
 
-        use_pygame = tk.BooleanVar(value=True)
+        use_pygame = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text="Use Pygame visualization (if available)", variable=use_pygame).pack(anchor=tk.W, pady=5)
 
-        show_text = tk.BooleanVar(value=True)
+        show_text = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text="Show text visualization", variable=show_text).pack(anchor=tk.W, pady=5)
+
+        use_matlab = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame, text="Run MATLAB simulation", variable=use_matlab).pack(anchor=tk.W, pady=5)
 
         max_steps = tk.IntVar(value=500)
         ttk.Label(frame, text="Max steps:").pack(anchor=tk.W, pady=(10, 0))
@@ -721,7 +724,8 @@ class VisualConfigurator:
                 simulation.run(
                     max_steps=max_steps.get(),
                     show_visualization=show_text.get(),
-                    use_pygame=use_pygame.get()
+                    use_pygame=use_pygame.get(),
+                    use_matlab=use_matlab.get()
                 )
                 messagebox.showinfo("Simulation Complete", "Simulation finished successfully!")
             except Exception as e:

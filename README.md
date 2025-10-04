@@ -35,7 +35,20 @@ pip install pygame
 
 ## Quick Start
 
-Run the simulation with default configuration:
+**Recommended**: Use the visual configurator for easy setup:
+
+```bash
+python visual_configurator.py
+```
+
+This provides an interactive interface to:
+- Design custom map layouts
+- Place agents and targets visually
+- Add obstacles and initial fire positions
+- Configure simulation parameters
+- Launch simulations directly
+
+Or run the simulation with default configuration:
 
 ```bash
 python simulation.py

@@ -1,3 +1,25 @@
+"""
+Fire Evacuation Simulation with D* Lite Pathfinding
+====================================================
+
+SPATIAL/TEMPORAL MODEL ASSUMPTIONS:
+- Default cell size: 0.3m × 0.3m (configurable via cell_size parameter)
+- Default timestep: 0.5 seconds (configurable via timestep_duration parameter)
+- Agent movement: 1 cell per timestep (0.6 m/s at default settings)
+- Fire updates: Configurable interval (default every 4 timesteps = 2 seconds for realistic model)
+
+COORDINATE SYSTEM:
+- Grid positions: "x{col}y{row}" format (e.g., "x12y9")
+- Grid access: grid[row][col] or grid[y][x]
+
+FIRE MODEL OPTIONS:
+- "realistic": Physics-aligned model (3-6 min to flashover, 0.1-0.2 m/s spread)
+- "aggressive": Stress-testing model (30-60 sec to flashover, 0.3-0.5 m/s spread)
+- "default": Original model from fire_model_float.py
+
+Author: Fire Evacuation Simulation System
+"""
+
 import random
 import os
 from d_star_lite.grid import GridWorld
@@ -36,10 +58,15 @@ class SimulationConfig:
     initial_fire_map: list[list[float]]
     agent_num: int
     viewing_range: int = 5
+    # New spatial/temporal parameters
+    cell_size: float = 0.3  # meters per cell
+    timestep_duration: float = 0.5  # seconds per timestep
+    fire_update_interval: int = 4  # update fire every N timesteps (default: 4 timesteps = 2 seconds)
+    fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
 
     @classmethod
     def from_json(cls, json_data):
-        return cls(
+        config = cls(
             map_rows=json_data['map_rows'],
             map_cols=json_data['map_cols'],
             max_occupancy=json_data['max_occupancy'],
@@ -47,8 +74,22 @@ class SimulationConfig:
             targets=json_data['targets'],
             initial_fire_map=json_data.get('initial_fire_map', [[0 for _ in range(json_data['map_cols'])] for _ in range(json_data['map_rows'])]),
             agent_num=json_data['agent_num'],
-            viewing_range=json_data.get('viewing_range', 5)
+            viewing_range=json_data.get('viewing_range', 5),
+            cell_size=json_data.get('cell_size', 0.3),
+            timestep_duration=json_data.get('timestep_duration', 0.5),
+            fire_update_interval=json_data.get('fire_update_interval', 4),
+            fire_model_type=json_data.get('fire_model_type', 'realistic')
         )
+
+        # Auto-scale viewing_range based on cell_size if it seems too small
+        # Assume 3m is a reasonable viewing distance for fire/smoke conditions
+        if config.cell_size < 0.5 and config.viewing_range < 8:
+            recommended_range = int(3.0 / config.cell_size)
+            if config.viewing_range < recommended_range:
+                print(f"Info: Auto-scaling viewing_range from {config.viewing_range} to {recommended_range} based on cell_size={config.cell_size}m")
+                config.viewing_range = recommended_range
+
+        return config
 
 class EvacuationAgent():
     def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, targets: list[str], viewing_range=5):
@@ -226,10 +267,23 @@ class EvacuationSimulation():
         # Set the obstacle value to match fire (-1)
         set_OBS_VAL(-1)
         self.evacuated_agents = []
-        self.progress = {i: 0 for i in range(config.agent_num)}   
+        self.progress = {i: 0 for i in range(config.agent_num)}
+        self.config = config  # Store config for fire update interval
 
-        # Initialize fire model (parameters can be adjusted as needed)     
-        self.model = create_fire_model(rows=10, cols=15, wind_speed=1.0)
+        # Initialize fire model based on selected type
+        if config.fire_model_type == "realistic":
+            from fire_model_realistic import create_fire_model
+            self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols)
+            print(f"Using REALISTIC fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
+        elif config.fire_model_type == "aggressive":
+            from fire_model_aggressive import create_fire_model
+            self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols)
+            print(f"Using AGGRESSIVE fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
+        else:
+            # Default fire model
+            self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols, wind_speed=1.0)
+            print(f"Using DEFAULT fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
+
         self.monitor = FireMonitor(self.model)
 
         try:
@@ -463,10 +517,11 @@ class EvacuationSimulation():
                             prev_target = self.targets[agent.targetidx - 1]
                             reached_targets.add(prev_target)
 
-            # Here you can add logic to update the environment, e.g., fire spread
-            changes = self.update_fire()
-            if changes:
-                self.update_environment(changes)
+            # Update fire model at specified interval (decoupled from agent movement)
+            if self.steps % self.config.fire_update_interval == 0:
+                changes = self.update_fire()
+                if changes:
+                    self.update_environment(changes)
 
             # Handle visualization updates
             if visualizer:

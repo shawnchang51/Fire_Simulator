@@ -8,15 +8,19 @@ class VisualConfigurator:
     def __init__(self, root):
         self.root = root
         self.root.title("Evacuation Simulation Configurator")
-        self.root.geometry("1400x900")
+        self.root.geometry("1600x1000")
 
-        # Configuration variables
+        # Configuration variables - updated defaults for 0.3m cell model
         self.config_vars = {
-            'map_rows': tk.IntVar(value=20),
-            'map_cols': tk.IntVar(value=20),
-            'max_occupancy': tk.IntVar(value=2),
+            'map_rows': tk.IntVar(value=60),
+            'map_cols': tk.IntVar(value=60),
+            'max_occupancy': tk.IntVar(value=1),
             'agent_num': tk.IntVar(value=5),
-            'viewing_range': tk.IntVar(value=3)
+            'viewing_range': tk.IntVar(value=10),
+            'cell_size': tk.DoubleVar(value=0.3),
+            'timestep_duration': tk.DoubleVar(value=0.5),
+            'fire_update_interval': tk.IntVar(value=4),
+            'fire_model_type': tk.StringVar(value='realistic')
         }
 
         # Lists for positions and targets
@@ -25,8 +29,8 @@ class VisualConfigurator:
         self.fire_positions = []
         self.obstacle_positions = []
 
-        # Interactive map variables
-        self.cell_size = 20
+        # Interactive map variables - smaller cell size for larger grids
+        self.cell_size = 10  # Reduced from 20 for 60x60 grids
         self.map_canvas = None
         self.current_tool = "agent"  # "agent", "target", "fire", "obstacle", "erase"
 
@@ -81,6 +85,28 @@ class VisualConfigurator:
 
         ttk.Label(config_frame, text="Viewing Range:").grid(row=2, column=0, sticky=tk.W, pady=2)
         ttk.Spinbox(config_frame, from_=1, to=20, textvariable=self.config_vars['viewing_range'], width=10).grid(row=2, column=1, padx=(5, 0), pady=2)
+
+        # Physics/Temporal Configuration Section
+        physics_frame = ttk.LabelFrame(scrollable_frame, text="Physics & Fire Model Configuration", padding="10")
+        physics_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(physics_frame, text="Cell Size (m):").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Spinbox(physics_frame, from_=0.1, to=2.0, increment=0.1, textvariable=self.config_vars['cell_size'], width=10).grid(row=0, column=1, padx=(5, 20), pady=2)
+
+        ttk.Label(physics_frame, text="Timestep (s):").grid(row=0, column=2, sticky=tk.W, pady=2)
+        ttk.Spinbox(physics_frame, from_=0.1, to=5.0, increment=0.1, textvariable=self.config_vars['timestep_duration'], width=10).grid(row=0, column=3, padx=(5, 0), pady=2)
+
+        ttk.Label(physics_frame, text="Fire Update Interval:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Spinbox(physics_frame, from_=1, to=20, textvariable=self.config_vars['fire_update_interval'], width=10).grid(row=1, column=1, padx=(5, 20), pady=2)
+
+        ttk.Label(physics_frame, text="Fire Model:").grid(row=1, column=2, sticky=tk.W, pady=2)
+        fire_model_combo = ttk.Combobox(physics_frame, textvariable=self.config_vars['fire_model_type'],
+                                        values=['realistic', 'aggressive', 'default'], state='readonly', width=12)
+        fire_model_combo.grid(row=1, column=3, padx=(5, 0), pady=2)
+
+        # Info label for fire models
+        info_text = "Realistic: 3-6min flashover | Aggressive: 30-60s flashover | Default: Original"
+        ttk.Label(physics_frame, text=info_text, font=('Arial', 8), foreground='gray').grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
 
         # Start Positions Section
         positions_frame = ttk.LabelFrame(scrollable_frame, text="Agent Start Positions", padding="10")
@@ -173,6 +199,18 @@ class VisualConfigurator:
         # Add map dimension update button
         ttk.Button(map_control_frame, text="Update Map Size", command=self.update_map_size).pack(side=tk.LEFT, padx=(0, 5))
 
+        # Zoom control for larger grids
+        zoom_frame = ttk.Frame(control_frame)
+        zoom_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(zoom_frame, text="Canvas Cell Size (Zoom):").pack(side=tk.LEFT, padx=(0, 10))
+        self.zoom_var = tk.IntVar(value=self.cell_size)
+        zoom_scale = ttk.Scale(zoom_frame, from_=5, to=30, orient=tk.HORIZONTAL,
+                              variable=self.zoom_var, command=self.on_zoom_change)
+        zoom_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.zoom_label = ttk.Label(zoom_frame, text=f"{self.cell_size}px")
+        self.zoom_label.pack(side=tk.LEFT)
+
         # Map canvas frame with scrollbars
         canvas_frame = ttk.Frame(parent)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
@@ -207,6 +245,12 @@ class VisualConfigurator:
 
     def on_tool_change(self):
         self.current_tool = self.tool_var.get()
+
+    def on_zoom_change(self, value):
+        """Handle zoom slider changes"""
+        self.cell_size = int(float(value))
+        self.zoom_label.config(text=f"{self.cell_size}px")
+        self.refresh_map()
 
     def update_map_size(self):
         """Update map canvas size when dimensions change"""
@@ -253,8 +297,8 @@ class VisualConfigurator:
                 self.targets_listbox.insert(tk.END, f"Target {len(self.targets)}: {position}")
 
         elif self.current_tool == "fire":
-            # Add fire position with default intensity
-            fire_tuple = (position, 0.5)
+            # Add fire position with default intensity 2.0 (growth phase - spreads effectively)
+            fire_tuple = (position, 2.0)
             # Remove existing fire at this position
             self.fire_positions = [f for f in self.fire_positions if f[0] != position]
             self.fire_positions.append(fire_tuple)
@@ -560,7 +604,11 @@ class VisualConfigurator:
             'targets': self.targets,
             'initial_fire_map': initial_fire_map,
             'agent_num': self.config_vars['agent_num'].get(),
-            'viewing_range': self.config_vars['viewing_range'].get()
+            'viewing_range': self.config_vars['viewing_range'].get(),
+            'cell_size': self.config_vars['cell_size'].get(),
+            'timestep_duration': self.config_vars['timestep_duration'].get(),
+            'fire_update_interval': self.config_vars['fire_update_interval'].get(),
+            'fire_model_type': self.config_vars['fire_model_type'].get()
         }
 
         filename = filedialog.asksaveasfilename(
@@ -656,7 +704,7 @@ class VisualConfigurator:
                 except:
                     continue
 
-            # Create configuration
+            # Create configuration with new physics parameters
             config = SimulationConfig(
                 map_rows=self.config_vars['map_rows'].get(),
                 map_cols=self.config_vars['map_cols'].get(),
@@ -665,7 +713,11 @@ class VisualConfigurator:
                 targets=self.targets,
                 initial_fire_map=initial_fire_map,
                 agent_num=self.config_vars['agent_num'].get(),
-                viewing_range=self.config_vars['viewing_range'].get()
+                viewing_range=self.config_vars['viewing_range'].get(),
+                cell_size=self.config_vars['cell_size'].get(),
+                timestep_duration=self.config_vars['timestep_duration'].get(),
+                fire_update_interval=self.config_vars['fire_update_interval'].get(),
+                fire_model_type=self.config_vars['fire_model_type'].get()
             )
 
             # Run simulation

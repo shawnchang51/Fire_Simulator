@@ -64,6 +64,7 @@ class SimulationConfig:
     timestep_duration: float = 0.5  # seconds per timestep
     fire_update_interval: int = 4  # update fire every N timesteps (default: 4 timesteps = 2 seconds)
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
+    agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
 
     @classmethod
     def from_json(cls, json_data):
@@ -79,7 +80,8 @@ class SimulationConfig:
             cell_size=json_data.get('cell_size', 0.3),
             timestep_duration=json_data.get('timestep_duration', 0.5),
             fire_update_interval=json_data.get('fire_update_interval', 4),
-            fire_model_type=json_data.get('fire_model_type', 'realistic')
+            fire_model_type=json_data.get('fire_model_type', 'realistic'),
+            agent_fearness=json_data.get('agent_fearness', None)
         )
 
         # Auto-scale viewing_range based on cell_size if it seems too small
@@ -93,7 +95,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, targets: list[str], viewing_range=5):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, targets: list[str], viewing_range=5, fire_fearness=1.0):
         try:
             self.id = id
             self.start = start
@@ -101,13 +103,14 @@ class EvacuationAgent():
             self.max_occupancy = max_occupancy
             self.VIEWING_RANGE = viewing_range
             self.fire_damage = 0
+            self.fire_fearness = fire_fearness
 
             # Validate inputs
             if not targets or len(targets) == 0:
                 raise ValueError(f"Agent {id}: targets list cannot be empty")
 
             try:
-                self.graph = GridWorld(map_rows, map_cols)
+                self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
             except Exception as e:
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_rows}x{map_cols}: {e}")
 
@@ -305,8 +308,12 @@ class EvacuationSimulation():
             self.agents = []
             for i in range(self.agent_num):
                 start_pos = config.start_positions[i]  # Example start positions; modify as needed
+                # Get fearness for this agent (default to 1.0 if not specified)
+                fearness = 1.0
+                if config.agent_fearness and i < len(config.agent_fearness):
+                    fearness = config.agent_fearness[i]
                 try:
-                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.targets, self.viewing_range)
+                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.targets, self.viewing_range, fire_fearness=fearness)
                     self.agents.append(agent)
                 except Exception as e:
                     print(f"Failed to initialize agent {i}: {e}")

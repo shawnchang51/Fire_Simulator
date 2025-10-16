@@ -2,9 +2,10 @@ from .graph import Node, Graph
 
 
 class GridWorld(Graph):
-    def __init__(self, x_dim, y_dim, connect8=True):
+    def __init__(self, x_dim, y_dim, connect8=True, fire_fearness=1.0):
         self.x_dim = x_dim
         self.y_dim = y_dim
+        self.fire_fearness = fire_fearness
         # First make an element for each row (height of grid)
         self.cells = [0] * y_dim
         # Go through each element and replace with row (width of grid)
@@ -52,13 +53,15 @@ class GridWorld(Graph):
             print(str_msg)
 
     def getTerrainCost(self, cell_value):
-        """Calculate terrain cost based on cell value"""
+        """Calculate terrain cost based on cell value and fire fearness"""
         if cell_value == -5:  # impassable obstacle
             return float('inf')
         elif cell_value < 0:
             return abs(cell_value) * 2  # other negative values as difficult terrain
         else:
-            return max(1, cell_value + 1)  # positive values: 0->1, 1->2, 2->3, etc.
+            base_cost = max(1, cell_value + 1)  # positive values: 0->1, 1->2, 2->3, etc.
+            # Apply fearness multiplier to fire (cell_value > 0)
+            return base_cost * self.fire_fearness if cell_value > 0 else base_cost
 
     def generateGraphFromGrid(self):
         import math

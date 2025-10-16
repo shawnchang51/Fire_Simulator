@@ -32,6 +32,7 @@ from fire_model_float import create_fire_model
 from fire_monitor import FireMonitor
 from snapshot_ainmator import RealtimeGridAnimator
 from datetime import datetime
+import argparse
 
 try:
     from pygame_visualizer import EvacuationVisualizer
@@ -571,7 +572,17 @@ if __name__ == "__main__":
     #     start_positions=['x0y19', 'x7y1', 'x13y5', 'x10y16', 'x19y10'],
     #     initial_fire_map=initial_fire_map
     # )
-    json_path = os.path.join(os.path.dirname(__file__), 'example_configuration.json')
+
+    parser = argparse.ArgumentParser(description="Read configuration file (JSON)")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="example_configuration.json",
+        help="Path to configuration file (default: example_configuration.json)"
+    )
+    args = parser.parse_args()
+
+    json_path = os.path.join(os.path.dirname(__file__), args.config)
     with open(json_path, 'r', encoding='utf-8') as f:
         json_config = json.load(f)
     config = SimulationConfig.from_json(json_config)

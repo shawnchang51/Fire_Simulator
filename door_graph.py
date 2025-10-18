@@ -7,7 +7,7 @@ Implements two-tier navigation system:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set
 from d_star_lite.utils import stateNameToCoords
 from collections import deque
 import heapq
@@ -37,6 +37,8 @@ class DoorGraph:
         self.nodes: Dict[str, DoorNode] = {}
         self.edges: Dict[Tuple[str, str], DoorEdge] = {}
         self.adjacency: Dict[str, List[str]] = {}
+        # Cache for get_connected_nodes results
+        self._connected_cache: Dict[str, List[Tuple[str, float]]] = {}
 
     def add_node(self, node: DoorNode):
         """Add a door/exit node"""
@@ -62,6 +64,52 @@ class DoorGraph:
             self.edges[(door_a, door_b)].current_weight = new_weight
         if (door_b, door_a) in self.edges:
             self.edges[(door_b, door_a)].current_weight = new_weight
+
+    def get_connected_nodes_cached(self, grid, position: str) -> List[Tuple[str, float]]:
+        """
+        Get connected nodes with caching.
+
+        Args:
+            grid: 2D array representing the environment
+            position: Starting position in "x{col}y{row}" format
+
+        Returns:
+            List of tuples (position_string, distance) for all connected doors
+        """
+        if position in self._connected_cache:
+            return self._connected_cache[position]
+
+        # Compute and cache
+        door_positions = [node.position for node in self.nodes.values()]
+        result = get_connected_nodes(grid, position, obstacle_value=-2,
+                                     door_positions=door_positions)
+        self._connected_cache[position] = result
+        return result
+
+    def clear_cache(self):
+        """Clear the entire cache (call when grid changes due to fire/obstacles)"""
+        self._connected_cache.clear()
+
+    def invalidate_cache_region(self, changed_positions: List[str]):
+        """
+        Invalidate cache for positions affected by fire/obstacles.
+
+        Args:
+            changed_positions: List of position strings where fire/obstacles appeared
+        """
+        # Simple approach: Clear entire cache when anything changes
+        # This is conservative but safe
+        self._connected_cache.clear()
+
+    def invalidate_cache_position(self, position: str):
+        """
+        Invalidate cache for a specific position.
+
+        Args:
+            position: Position string to invalidate
+        """
+        if position in self._connected_cache:
+            del self._connected_cache[position]
 
 
 def bfs_with_blocked_cells(grid, start_pos, goal_pos, blocked_positions):
@@ -265,3 +313,200 @@ def find_nearest_exit(position: str, graph: DoorGraph) -> Optional[str]:
             nearest = door_id
 
     return nearest
+
+
+def find_door_id_by_position(graph: DoorGraph, position: str) -> Optional[str]:
+    """
+    Find door ID that has the given position.
+
+    Args:
+        graph: DoorGraph to search
+        position: Position string in "x{col}y{row}" format
+
+    Returns:
+        Door ID if found, None otherwise
+    """
+    for door_id, node in graph.nodes.items():
+        if node.position == position:
+            return door_id
+    return None
+
+
+def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: List[str] = None) -> List[Tuple[str, float]]:
+    """
+    Find all doors connected to the given position (in the same room).
+
+    Uses flood-fill BFS to find all reachable doors without crossing obstacles.
+
+    Args:
+        grid: 2D array representing the environment
+        position: Starting position in "x{col}y{row}" format (e.g., "x15y3")
+        obstacle_value: Value in grid that represents obstacles (default: -2 for walls)
+        door_positions: Optional list of door position strings to treat as boundaries
+
+    Returns:
+        List of tuples (position_string, distance) where:
+        - position_string: "x{col}y{row}" format for each connected node
+        - distance: BFS distance from starting position (diagonal moves count as 1)
+
+    Example:
+        >>> connected = get_connected_nodes(grid, "x10y5")
+        >>> print(f"Found {len(connected)} connected cells")
+        >>> print(connected[:5])  # First 5 cells with distances
+        [('x10y5', 0.0), ('x10y6', 1.0), ('x11y5', 1.0), ('x9y5', 1.0), ('x10y4', 1.0)]
+    """
+    rows = len(grid)
+    cols = len(grid[0])
+
+    # Parse starting position
+    start_coords = stateNameToCoords(position)
+    start_x, start_y = start_coords
+
+    # Validate starting position
+    if not (0 <= start_x < cols and 0 <= start_y < rows):
+        return []
+
+    # If starting position is an obstacle, return empty list
+    if grid[start_y][start_x] == obstacle_value:
+        return []
+
+    # BFS to find all connected cells with distances
+    # Queue stores (x, y, distance)
+    queue = deque([(start_x, start_y, 0)])
+    visited = {(start_x, start_y)}
+    connected_nodes = []
+
+    # 8-directional movement (same as used in GridWorld)
+    directions = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+
+    while queue:
+        x, y, dist = queue.popleft()
+
+        # Add current position to results (but don't expand beyond doors)
+        if door_positions and f"x{x}y{y}" in door_positions:
+            connected_nodes.append((f"x{x}y{y}", float(dist)))
+            visited.add((x, y))
+            continue  # Skip doors if specified (don't explore beyond them)
+
+        # Explore neighbors
+        for dx, dy in directions:
+            nx, ny = x + dx, y + dy
+
+            # Bounds check
+            if not (0 <= nx < cols and 0 <= ny < rows):
+                continue
+
+            # Skip if already visited
+            if (nx, ny) in visited:
+                continue
+
+            # Skip obstacles
+            if grid[ny][nx] == obstacle_value:
+                continue
+
+            # Mark as visited and add to queue with incremented distance
+            visited.add((nx, ny))
+            queue.append((nx, ny, dist + 1))
+
+    return connected_nodes
+
+
+def update_room_edge_weights(grid, graph: DoorGraph, position: str, estimated_fire_value: float):
+    """
+    Update edge weights based on fire spread from given position.
+
+    Args:
+        grid: 2D fire map
+        graph: DoorGraph to update
+        position: Position where fire spread occurred
+        estimated_fire_value: Additional weight penalty for fire
+    """
+    # Use cached version for better performance
+    connected_nodes = graph.get_connected_nodes_cached(grid, position)
+
+    for i, (pos, dist) in enumerate(connected_nodes):
+        for pos2, dist2 in connected_nodes[i+1:]:
+            graph.update_edge_weight(pos, pos2, estimated_fire_value + graph.get_weight(pos, pos2))
+
+
+def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:
+    """
+    Find shortest path from start_pos to any exit in the door graph.
+
+    Uses hybrid approach:
+    - Step 0: Grid-level BFS to find connected doors from start_pos
+    - Step 1+: Dijkstra on door graph to find shortest path to any exit
+
+    Args:
+        graph: DoorGraph containing doors and exits
+        start_pos: Starting position in "x{col}y{row}" format
+        grid: 2D array representing the environment
+
+    Returns:
+        List of door IDs forming the path to an exit, or None if no exit reachable
+
+    Example:
+        >>> path = replan_path(graph, "x10y5", grid)
+        >>> print(path)
+        ['door1', 'door3', 'exit2']
+    """
+    # STEP 0: Special initialization - bridge from grid to door graph
+    # Check if start position is already at a door
+    start_door_id = find_door_id_by_position(graph, start_pos)
+
+    if start_door_id:
+        # Start is already at a door
+        if graph.nodes[start_door_id].type == 'exit':
+            return [start_door_id]  # Already at exit
+        # Initialize with this door at distance 0
+        pq = [(0.0, start_door_id, [start_door_id])]
+    else:
+        # Start is not at a door - find connected doors via grid-level BFS
+        connected_nodes = graph.get_connected_nodes_cached(grid, start_pos)
+
+        if not connected_nodes:
+            return None  # No doors reachable from start position
+
+        # Initialize priority queue with all connected doors
+        pq = []
+        for door_pos, dist_to_door in connected_nodes:
+            door_id = find_door_id_by_position(graph, door_pos)
+            if door_id:
+                heapq.heappush(pq, (dist_to_door, door_id, [door_id]))
+
+        if not pq:
+            return None  # No valid doors found in connected nodes
+
+    # STEP 1+: Standard Dijkstra on door graph
+    visited = set()
+
+    while pq:
+        current_dist, current_door, path = heapq.heappop(pq)
+
+        # Skip if already visited
+        if current_door in visited:
+            continue
+        visited.add(current_door)
+
+        # Goal check: Is this an exit?
+        if graph.nodes[current_door].type == 'exit':
+            return path  # Found shortest path to an exit!
+
+        # Explore neighbors via door graph edges
+        for neighbor_door in graph.adjacency[current_door]:
+            if neighbor_door in visited:
+                continue
+
+            # Get edge weight (may be dynamically updated due to fire)
+            edge_weight = graph.get_weight(current_door, neighbor_door)
+
+            # Skip if edge is blocked (infinite weight)
+            if edge_weight == float('inf'):
+                continue
+
+            new_dist = current_dist + edge_weight
+            new_path = path + [neighbor_door]
+
+            heapq.heappush(pq, (new_dist, neighbor_door, new_path))
+
+    return None  # No exit reachable

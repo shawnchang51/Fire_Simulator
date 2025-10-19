@@ -446,7 +446,10 @@ def update_room_edge_weights(grid, graph: DoorGraph, position: str, estimated_fi
             door_id2 = find_door_id_by_position(graph, pos2)
             if not door_id2:
                 continue
-            graph.update_edge_weight(door_id, door_id2, estimated_fire_value + graph.edges.get((door_id, door_id2)).base_distance)
+            edge = graph.edges.get((door_id, door_id2))
+            if not edge:
+                continue
+            graph.update_edge_weight(door_id, door_id2, estimated_fire_value + edge.base_distance)
 
 
 def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:

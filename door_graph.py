@@ -93,6 +93,7 @@ class DoorGraph:
     def clear_cache(self):
         """Clear the entire cache (call when grid changes due to fire/obstacles)"""
         self._connected_cache.clear()
+        self._fire_mean_cache.clear()
 
     def invalidate_cache_region(self, changed_positions: List[str]):
         """
@@ -386,6 +387,7 @@ def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: 
     # 8-directional movement (same as used in GridWorld)
     directions = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
     connected_cells_num = 0
+    fire_mean = 0.0
 
     while queue:
         x, y, dist = queue.popleft()
@@ -437,8 +439,14 @@ def update_room_edge_weights(grid, graph: DoorGraph, position: str, estimated_fi
     connected_nodes = graph.get_connected_nodes_cached(grid, position)
 
     for i, (pos, dist) in enumerate(connected_nodes):
+        door_id = find_door_id_by_position(graph, pos)
+        if not door_id:
+            continue
         for pos2, dist2 in connected_nodes[i+1:]:
-            graph.update_edge_weight(pos, pos2, estimated_fire_value + graph.get_weight(pos, pos2))
+            door_id2 = find_door_id_by_position(graph, pos2)
+            if not door_id2:
+                continue
+            graph.update_edge_weight(door_id, door_id2, estimated_fire_value + graph.edges.get((door_id, door_id2)).base_distance)
 
 
 def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:

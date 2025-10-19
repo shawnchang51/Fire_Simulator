@@ -57,7 +57,6 @@ class SimulationConfig:
     map_cols: int
     max_occupancy: int
     start_positions: list[str]
-    targets: list[str]
     initial_fire_map: list[list[float]]
     agent_num: int
     viewing_range: int = 5
@@ -67,6 +66,7 @@ class SimulationConfig:
     fire_update_interval: int = 4  # update fire every N timesteps (default: 4 timesteps = 2 seconds)
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
+    door_configs: list[dict] = None  # Optional door configurations
 
     @classmethod
     def from_json(cls, json_data):
@@ -75,7 +75,6 @@ class SimulationConfig:
             map_cols=json_data['map_cols'],
             max_occupancy=json_data['max_occupancy'],
             start_positions=json_data['start_positions'],
-            targets=json_data['targets'],
             initial_fire_map=json_data.get('initial_fire_map', [[0 for _ in range(json_data['map_cols'])] for _ in range(json_data['map_rows'])]),
             agent_num=json_data['agent_num'],
             viewing_range=json_data.get('viewing_range', 5),
@@ -83,7 +82,8 @@ class SimulationConfig:
             timestep_duration=json_data.get('timestep_duration', 0.5),
             fire_update_interval=json_data.get('fire_update_interval', 4),
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
-            agent_fearness=json_data.get('agent_fearness', None)
+            agent_fearness=json_data.get('agent_fearness', 1.0),
+            door_configs=json_data.get('door_configs', [])
         )
 
         # Auto-scale viewing_range based on cell_size if it seems too small
@@ -109,18 +109,18 @@ class EvacuationAgent():
             self.door_graph = copy.deepcopy(base_door_graph)
             self.door_path = None
 
-            path = replan_path(self.door_graph, start, None)
-            if path is None:
-                raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
-
-            self.targetidx = 0
-            self.targets = [self.door_graph.nodes[node]['position'] for node in path]
-            self.target = self.targets[self.targetidx]
-
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
             except Exception as e:
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_rows}x{map_cols}: {e}")
+
+            path = replan_path(self.door_graph, start, self.graph.cells)
+            if path is None:
+                raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
+
+            self.targetidx = 0
+            self.targets = [self.door_graph.nodes[node].position for node in path]
+            self.target = self.targets[self.targetidx]
 
             try:
                 start_coords = stateNameToCoords(start)
@@ -157,31 +157,34 @@ class EvacuationAgent():
             raise
 
     def estimate_fire(self, current_location=None, fire_fearness=None):
-        _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph, current_location if current_location is not None else self.s_current, estimate_fire=True)
+        _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph.cells, current_location if current_location is not None else self.s_current, estimate_fire=True)
         return fire_mean*fire_fearness if fire_fearness is not None else fire_mean*self.fire_fearness
 
     def update_lazy_graph(self, current_location=None):
         try:
             fire_estimate = self.estimate_fire(current_location, self.fire_fearness)
-            update_room_edge_weights(self.graph, self.door_graph, current_location, fire_estimate)
+            update_room_edge_weights(self.graph.cells, self.door_graph, current_location, fire_estimate)
         except Exception as e:
             print(f"Error: Agent {self.id} failed to update lazy graph at {self.s_current}: {e}")
             raise
     
     def replan_door_path(self, current_location):
         try:
-            path = replan_path(self.door_graph, current_location, self.graph)
+            path = replan_path(self.door_graph, current_location, self.graph.cells)
             if path is None:
                 print(f"Warning: Agent {self.id} could not find a new door path from {current_location}")
                 return 'No Door Path'
 
-            self.targets = [self.door_graph.nodes[node]['position'] for node in path]
+            self.targets = [self.door_graph.nodes[node].position for node in path]
             self.targetidx = 0
             self.target = self.targets[self.targetidx]
 
             try:
                 self.graph.setStart(self.s_current)
                 self.graph.setGoal(self.target)
+                # Reinitialize D* Lite for the new target
+                self.queue, self.k_m = self.graph.reset_for_new_planning()
+                self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
             except Exception as e:
                 print(f"Error: Agent {self.id} failed to re-initialize D* Lite after door replanning: {e}")
                 return 'Replanning Error'
@@ -195,8 +198,8 @@ class EvacuationAgent():
     def set_next_target(self, current_location, replan=False):
         try:
             self.targetidx += 1
-            current_id = find_door_id_by_position(current_location)
-            current_type = self.door_graph.nodes.get(current_id, {}).get('type', None)
+            current_id = find_door_id_by_position(self.door_graph, current_location)
+            current_type = self.door_graph.nodes[current_id].type if current_id in self.door_graph.nodes else None
             if self.targetidx >= len(self.targets) or current_type == 'exit':
                 return 'Evacuated'
             elif replan:
@@ -272,7 +275,7 @@ class EvacuationAgent():
                 self.s_current = self.target
 
                 self.position_history.append(self.s_current)
-                result = self.set_next_target(self.s_current)
+                result = self.set_next_target(self.s_current, replan=True)
                 if result == 'Evacuated':
                     coord_target = stateNameToCoords(self.target)
                     self.occupancy[coord_target[1]][coord_target[0]] -= 1
@@ -349,7 +352,7 @@ class EvacuationSimulation():
             self.max_occupancy = config.max_occupancy
             self.agent_num = config.agent_num
             self.viewing_range = config.viewing_range
-            self.door_configs = config.get('door_configs', [])
+            self.door_configs = config.door_configs if config.door_configs else []
             self.occupancy = [0] * self.map_rows
             for i in range(self.map_rows):
                 self.occupancy[i] = [0] * self.map_cols

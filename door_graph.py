@@ -39,6 +39,7 @@ class DoorGraph:
         self.adjacency: Dict[str, List[str]] = {}
         # Cache for get_connected_nodes results
         self._connected_cache: Dict[str, List[Tuple[str, float]]] = {}
+        self._fire_mean_cache: Dict[str, float] = {}
 
     def add_node(self, node: DoorNode):
         """Add a door/exit node"""
@@ -65,7 +66,7 @@ class DoorGraph:
         if (door_b, door_a) in self.edges:
             self.edges[(door_b, door_a)].current_weight = new_weight
 
-    def get_connected_nodes_cached(self, grid, position: str) -> List[Tuple[str, float]]:
+    def get_connected_nodes_cached(self, grid, position: str, estimate_fire=False) -> List[Tuple[str, float]]:
         """
         Get connected nodes with caching.
 
@@ -77,14 +78,17 @@ class DoorGraph:
             List of tuples (position_string, distance) for all connected doors
         """
         if position in self._connected_cache:
+            if estimate_fire:
+                return self._connected_cache[position], self._fire_mean_cache.get(position, 0.0)
             return self._connected_cache[position]
 
         # Compute and cache
         door_positions = [node.position for node in self.nodes.values()]
-        result = get_connected_nodes(grid, position, obstacle_value=-2,
-                                     door_positions=door_positions)
+        result, fire_mean = get_connected_nodes(grid, position, obstacle_value=-2,
+                                     door_positions=door_positions, estimate_fire=True)
         self._connected_cache[position] = result
-        return result
+        self._fire_mean_cache[position] = fire_mean
+        return result, fire_mean if estimate_fire else result
 
     def clear_cache(self):
         """Clear the entire cache (call when grid changes due to fire/obstacles)"""
@@ -100,6 +104,7 @@ class DoorGraph:
         # Simple approach: Clear entire cache when anything changes
         # This is conservative but safe
         self._connected_cache.clear()
+        self._fire_mean_cache.clear()
 
     def invalidate_cache_position(self, position: str):
         """
@@ -110,6 +115,8 @@ class DoorGraph:
         """
         if position in self._connected_cache:
             del self._connected_cache[position]
+        if position in self._fire_mean_cache:
+            del self._fire_mean_cache[position]
 
 
 def bfs_with_blocked_cells(grid, start_pos, goal_pos, blocked_positions):
@@ -332,7 +339,7 @@ def find_door_id_by_position(graph: DoorGraph, position: str) -> Optional[str]:
     return None
 
 
-def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: List[str] = None) -> List[Tuple[str, float]]:
+def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: List[str] = None, estimate_fire = False) -> List[Tuple[str, float]]:
     """
     Find all doors connected to the given position (in the same room).
 
@@ -378,9 +385,14 @@ def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: 
 
     # 8-directional movement (same as used in GridWorld)
     directions = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+    connected_cells_num = 0
 
     while queue:
         x, y, dist = queue.popleft()
+
+        if estimate_fire:
+            connected_cells_num += 1
+            fire_mean = (fire_mean * (connected_cells_num - 1) + grid[y][x]) / connected_cells_num if grid[y][x] >= 0 else fire_mean
 
         # Add current position to results (but don't expand beyond doors)
         if door_positions and f"x{x}y{y}" in door_positions:
@@ -408,7 +420,7 @@ def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: 
             visited.add((nx, ny))
             queue.append((nx, ny, dist + 1))
 
-    return connected_nodes
+    return connected_nodes, fire_mean if estimate_fire else connected_nodes
 
 
 def update_room_edge_weights(grid, graph: DoorGraph, position: str, estimated_fire_value: float):

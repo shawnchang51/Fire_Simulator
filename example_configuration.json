@@ -17,11 +17,17 @@
     "x36y42",
     "x39y9"
   ],
-  "targets": [
-    "x51y6",
-    "x51y51",
-    "x6y51",
-    "x6y6"
+  "door_configs": [
+    {
+      "id": "d1",
+      "position": "x15y3",
+      "type": "door"
+    },
+    {
+      "id": "e1",
+      "position": "x50y35",
+      "type": "exit"
+    }
   ],
   "initial_fire_map": [
     [

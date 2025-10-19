@@ -27,12 +27,14 @@ from d_star_lite.utils import stateNameToCoords
 from d_star_lite.d_star_lite import initDStarLite, moveAndRescan, set_OBS_VAL, scanForObstacles, computeShortestPath
 from dataclasses import dataclass
 from fire_model_float import simulate_fire_spread
+from door_graph import build_door_graph, replan_path, find_door_id_by_position, update_room_edge_weights, DoorGraph
 import json
 from fire_model_float import create_fire_model
 from fire_monitor import FireMonitor
 from snapshot_ainmator import RealtimeGridAnimator
 from datetime import datetime
 import argparse
+import copy
 
 try:
     from pygame_visualizer import EvacuationVisualizer
@@ -95,7 +97,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, targets: list[str], viewing_range=5, fire_fearness=1.0):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=5, fire_fearness=1.0, base_door_graph: DoorGraph=None):
         try:
             self.id = id
             self.start = start
@@ -104,10 +106,16 @@ class EvacuationAgent():
             self.VIEWING_RANGE = viewing_range
             self.fire_damage = 0
             self.fire_fearness = fire_fearness
+            self.door_graph = copy.deepcopy(base_door_graph)
+            self.door_path = None
 
-            # Validate inputs
-            if not targets or len(targets) == 0:
-                raise ValueError(f"Agent {id}: targets list cannot be empty")
+            path = replan_path(self.door_graph, start, None)
+            if path is None:
+                raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
+
+            self.targetidx = 0
+            self.targets = [self.door_graph.nodes[node]['position'] for node in path]
+            self.target = self.targets[self.targetidx]
 
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
@@ -130,10 +138,6 @@ class EvacuationAgent():
             except IndexError as e:
                 raise ValueError(f"Agent {id}: Cannot access grid cell at {start_coords}: {e}")
 
-            self.targetidx = 0
-            self.targets = targets
-            self.target = targets[self.targetidx]
-
             self.k_m = 0
             self.queue = []
 
@@ -152,11 +156,59 @@ class EvacuationAgent():
             print(f"Critical error initializing agent {id}: {e}")
             raise
 
-    def set_next_target(self, current_location):
+    def estimate_fire(self, current_location=None, fire_fearness=None):
+        _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph, current_location if current_location is not None else self.s_current, estimate_fire=True)
+        return fire_mean*fire_fearness if fire_fearness is not None else fire_mean*self.fire_fearness
+
+    def update_lazy_graph(self, current_location=None):
+        try:
+            fire_estimate = self.estimate_fire(current_location, self.fire_fearness)
+            update_room_edge_weights(self.graph, self.door_graph, current_location, fire_estimate)
+        except Exception as e:
+            print(f"Error: Agent {self.id} failed to update lazy graph at {self.s_current}: {e}")
+            raise
+    
+    def replan_door_path(self, current_location):
+        try:
+            path = replan_path(self.door_graph, current_location, self.graph)
+            if path is None:
+                print(f"Warning: Agent {self.id} could not find a new door path from {current_location}")
+                return 'No Door Path'
+
+            self.targets = [self.door_graph.nodes[node]['position'] for node in path]
+            self.targetidx = 0
+            self.target = self.targets[self.targetidx]
+
+            try:
+                self.graph.setStart(self.s_current)
+                self.graph.setGoal(self.target)
+            except Exception as e:
+                print(f"Error: Agent {self.id} failed to re-initialize D* Lite after door replanning: {e}")
+                return 'Replanning Error'
+
+            return None
+
+        except Exception as e:
+            print(f"Critical error in replan_door_path() for agent {self.id}: {e}")
+            return f'Critical Replanning Error: {e}'
+
+    def set_next_target(self, current_location, replan=False):
         try:
             self.targetidx += 1
-            if self.targetidx >= len(self.targets):
+            current_id = find_door_id_by_position(current_location)
+            current_type = self.door_graph.nodes.get(current_id, {}).get('type', None)
+            if self.targetidx >= len(self.targets) or current_type == 'exit':
                 return 'Evacuated'
+            elif replan:
+                x, y = stateNameToCoords(current_location)
+                lx, ly = stateNameToCoords(self.position_history[-1]) if self.position_history else (None, None)
+                x = x + x - lx if lx is not None else x
+                y = y + y - ly if ly is not None else y
+                not_door_location = f'x{x}y{y}'
+                self.update_lazy_graph(not_door_location)
+                result = self.replan_door_path(not_door_location)
+                if result is not None:
+                    return result
             else:
                 try:
                     self.target = self.targets[self.targetidx]
@@ -295,9 +347,9 @@ class EvacuationSimulation():
             self.map_rows = config.map_rows
             self.map_cols = config.map_cols
             self.max_occupancy = config.max_occupancy
-            self.targets = config.targets
             self.agent_num = config.agent_num
             self.viewing_range = config.viewing_range
+            self.door_configs = config.get('door_configs', [])
             self.occupancy = [0] * self.map_rows
             for i in range(self.map_rows):
                 self.occupancy[i] = [0] * self.map_cols
@@ -306,6 +358,7 @@ class EvacuationSimulation():
                 raise ValueError("Occupancy grid dimensions do not match specified map dimensions")
 
             self.agents = []
+            self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs)
             for i in range(self.agent_num):
                 start_pos = config.start_positions[i]  # Example start positions; modify as needed
                 # Get fearness for this agent (default to 1.0 if not specified)
@@ -313,7 +366,7 @@ class EvacuationSimulation():
                 if config.agent_fearness and i < len(config.agent_fearness):
                     fearness = config.agent_fearness[i]
                 try:
-                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.targets, self.viewing_range, fire_fearness=fearness)
+                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph)
                     self.agents.append(agent)
                 except Exception as e:
                     print(f"Failed to initialize agent {i}: {e}")
@@ -437,7 +490,7 @@ class EvacuationSimulation():
             self.anim.update(fire_data['oxygen_map'])
         
 
-    def run(self, max_steps=1000, show_visualization=True, use_pygame=True, use_matlab=False):
+    def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False):
         self.steps = 0
         visualizer = None
         reached_targets = set()
@@ -599,5 +652,5 @@ if __name__ == "__main__":
         max_steps=500, 
         show_visualization=False, 
         use_pygame=False, 
-        use_matlab=True
+        use_matlab=False
         )

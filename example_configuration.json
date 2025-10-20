@@ -11,21 +11,21 @@
   "fire_update_interval": 2,
   "fire_model_type": "aggressive",
   "start_positions": [
-    "x36y27",
-    "x21y33",
-    "x18y24",
-    "x36y42",
-    "x39y9"
+    "x48y47",
+    "x11y50",
+    "x52y10",
+    "x7y26",
+    "x24y38"
   ],
   "door_configs": [
     {
       "id": "d1",
-      "position": "x15y3",
+      "position": "x9y8",
       "type": "door"
     },
     {
       "id": "e1",
-      "position": "x50y35",
+      "position": "x35y50",
       "type": "exit"
     }
   ],
@@ -3751,6 +3751,7 @@
       -2
     ]
   ],
+  "agent_fearness": [1, 3, 1.6, 0.7, 2.3],
   "agent_num": 5,
   "viewing_range": 10
 }

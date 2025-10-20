@@ -20,6 +20,7 @@ FIRE MODEL OPTIONS:
 Author: Fire Evacuation Simulation System
 """
 
+import pretty_errors
 import random
 import os
 from d_star_lite.grid import GridWorld
@@ -82,7 +83,7 @@ class SimulationConfig:
             timestep_duration=json_data.get('timestep_duration', 0.5),
             fire_update_interval=json_data.get('fire_update_interval', 4),
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
-            agent_fearness=json_data.get('agent_fearness', 1.0),
+            agent_fearness=json_data.get('agent_fearness', []),
             door_configs=json_data.get('door_configs', [])
         )
 
@@ -115,6 +116,8 @@ class EvacuationAgent():
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_rows}x{map_cols}: {e}")
 
             path = replan_path(self.door_graph, start, self.graph.cells)
+            print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
+            print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
             if path is None:
                 raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
 

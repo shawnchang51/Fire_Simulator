@@ -41,6 +41,9 @@ class DoorGraph:
         self._connected_cache: Dict[str, List[Tuple[str, float]]] = {}
         self._fire_mean_cache: Dict[str, float] = {}
 
+    def __str__(self):
+        return f"DoorGraph(nodes={len(self.nodes)}, edges={len(self.edges)})"
+
     def add_node(self, node: DoorNode):
         """Add a door/exit node"""
         self.nodes[node.id] = node
@@ -66,7 +69,7 @@ class DoorGraph:
         if (door_b, door_a) in self.edges:
             self.edges[(door_b, door_a)].current_weight = new_weight
 
-    def get_connected_nodes_cached(self, grid, position: str, estimate_fire=False) -> List[Tuple[str, float]]:
+    def get_connected_nodes_cached(self, grid, position: str) -> List[Tuple[str, float]]:
         """
         Get connected nodes with caching.
 
@@ -78,17 +81,16 @@ class DoorGraph:
             List of tuples (position_string, distance) for all connected doors
         """
         if position in self._connected_cache:
-            if estimate_fire:
-                return self._connected_cache[position], self._fire_mean_cache.get(position, 0.0)
-            return self._connected_cache[position]
+            return self._connected_cache[position], self._fire_mean_cache.get(position, 0.0)
 
         # Compute and cache
         door_positions = [node.position for node in self.nodes.values()]
         result, fire_mean = get_connected_nodes(grid, position, obstacle_value=-2,
-                                     door_positions=door_positions, estimate_fire=True)
+                                     door_positions=door_positions)
+        print(f"\033[32mCaching connected nodes for position {position}: {result} (type: {type(result)})\033[0m")
         self._connected_cache[position] = result
         self._fire_mean_cache[position] = fire_mean
-        return result, fire_mean if estimate_fire else result
+        return result, fire_mean
 
     def clear_cache(self):
         """Clear the entire cache (call when grid changes due to fire/obstacles)"""
@@ -193,6 +195,7 @@ def compute_connectivity(grid, door_nodes: List[DoorNode]) -> List[Tuple[str, st
 
             # Try to reach door_j from door_i
             distance = bfs_with_blocked_cells(grid, pos_i, pos_j, blocked)
+            print(f"Computed connectivity between {door_i.id} and {door_j.id}: distance={distance}")
 
             if distance is not None:
                 edges.append((door_i.id, door_j.id, float(distance)))
@@ -340,7 +343,7 @@ def find_door_id_by_position(graph: DoorGraph, position: str) -> Optional[str]:
     return None
 
 
-def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: List[str] = None, estimate_fire = False) -> List[Tuple[str, float]]:
+def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: List[str] = None) -> Tuple[List[Tuple[str, float]], float]:
     """
     Find all doors connected to the given position (in the same room).
 
@@ -392,9 +395,8 @@ def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: 
     while queue:
         x, y, dist = queue.popleft()
 
-        if estimate_fire:
-            connected_cells_num += 1
-            fire_mean = (fire_mean * (connected_cells_num - 1) + grid[y][x]) / connected_cells_num if grid[y][x] >= 0 else fire_mean
+        connected_cells_num += 1
+        fire_mean = (fire_mean * (connected_cells_num - 1) + grid[y][x]) / connected_cells_num if grid[y][x] >= 0 else fire_mean
 
         # Add current position to results (but don't expand beyond doors)
         if door_positions and f"x{x}y{y}" in door_positions:
@@ -422,7 +424,7 @@ def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: 
             visited.add((nx, ny))
             queue.append((nx, ny, dist + 1))
 
-    return connected_nodes, fire_mean if estimate_fire else connected_nodes
+    return connected_nodes, fire_mean
 
 
 def update_room_edge_weights(grid, graph: DoorGraph, position: str, estimated_fire_value: float):
@@ -436,7 +438,7 @@ def update_room_edge_weights(grid, graph: DoorGraph, position: str, estimated_fi
         estimated_fire_value: Additional weight penalty for fire
     """
     # Use cached version for better performance
-    connected_nodes = graph.get_connected_nodes_cached(grid, position)
+    connected_nodes, _ = graph.get_connected_nodes_cached(grid, position)
 
     for i, (pos, dist) in enumerate(connected_nodes):
         door_id = find_door_id_by_position(graph, pos)
@@ -485,19 +487,25 @@ def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:
         pq = [(0.0, start_door_id, [start_door_id])]
     else:
         # Start is not at a door - find connected doors via grid-level BFS
-        connected_nodes = graph.get_connected_nodes_cached(grid, start_pos)
+        connected_nodes, _ = graph.get_connected_nodes_cached(grid, start_pos)
 
         if not connected_nodes:
+            print(f"\033[32mNo doors connected to start position {start_pos}\033[0m")
             return None  # No doors reachable from start position
+        else:
+            print(f"\033[32mFound {len(connected_nodes)} doors connected to start position {start_pos}\033[0m")
 
         # Initialize priority queue with all connected doors
         pq = []
+        print(f"\033[32mConnected nodes:{connected_nodes}\033[0m")
         for door_pos, dist_to_door in connected_nodes:
             door_id = find_door_id_by_position(graph, door_pos)
+            print(f"\033[32mConnected door at {door_pos} with ID {door_id} at distance {dist_to_door}\033[0m")
             if door_id:
                 heapq.heappush(pq, (dist_to_door, door_id, [door_id]))
 
         if not pq:
+            print(f"\033[32mNo valid doors found in connected nodes for start position {start_pos}\033[0m")
             return None  # No valid doors found in connected nodes
 
     # STEP 1+: Standard Dijkstra on door graph
@@ -532,4 +540,5 @@ def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:
 
             heapq.heappush(pq, (new_dist, neighbor_door, new_path))
 
+    print(f"\033[32mNo exit reachable from start position {start_pos}\033[0m")
     return None  # No exit reachable

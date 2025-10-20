@@ -258,7 +258,7 @@ class MatlabStyleVisualizer:
                     zorder=16
                 )
 
-    def update_display(self, step: int, agents: List[Any], targets: List[str],
+    def update_display(self, step: int, agents: List[Any], door_configs: List[Dict],
                       fire_state: np.ndarray, status: Dict[str, Any]):
         """
         Update the visualization display.
@@ -383,20 +383,24 @@ class MatlabStyleVisualizer:
                         )
                     )
 
-        # Draw targets
-        for idx, target in enumerate(targets):
+        # Draw doors and exits
+        flags = (True, True)
+        for node in door_configs:
             try:
-                tx, ty = stateNameToCoords(target)
+                tx, ty = stateNameToCoords(node['position'])
+                node_type = node['type']
                 self.ax_main.scatter(
                     tx, ty,
                     s=300,
-                    c='lime',
+                    c='lime' if node_type == 'exit' else 'yellow',
                     marker='*',
                     edgecolors='black',
                     linewidths=2,
                     zorder=12,
-                    label=f'Target {idx+1}' if idx == 0 else ''
+                    label=f'Door' if flags[0] and node_type == 'door' else 'Exit' if flags[1] and node_type == 'exit' else ""
                 )
+                if node_type == 'door': flags = (False, flags[1])
+                if node_type == 'exit': flags = (flags[0], False)
             except:
                 pass
 

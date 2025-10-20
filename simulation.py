@@ -36,6 +36,7 @@ from snapshot_ainmator import RealtimeGridAnimator
 from datetime import datetime
 import argparse
 import copy
+import numpy as np
 
 try:
     from pygame_visualizer import EvacuationVisualizer
@@ -540,13 +541,12 @@ class EvacuationSimulation():
             done, status = self.status()
             # MATLAB visualizer needs fire state, pygame doesn't
             if use_matlab and MATLAB_VISUALIZER_AVAILABLE:
-                import numpy as np
                 fire_state_array = np.array(self.shared_fire_map)
-                if not visualizer.update_display(self.steps, self.agents, self.targets, fire_state_array, status):
+                if not visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status):
                     visualizer.close()
                     return
             else:
-                if not visualizer.update_display(self.steps, self.agents, self.targets, status, reached_targets):
+                if not visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets):
                     visualizer.close()
                     return
 
@@ -561,11 +561,10 @@ class EvacuationSimulation():
                 elif visualizer:
                     # Show final state for a few seconds
                     if use_matlab and MATLAB_VISUALIZER_AVAILABLE:
-                        import numpy as np
                         fire_state_array = np.array(self.shared_fire_map)
-                        visualizer.update_display(self.steps, self.agents, self.targets, fire_state_array, status)
+                        visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status)
                     else:
-                        visualizer.update_display(self.steps, self.agents, self.targets, status, reached_targets)
+                        visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets)
                     import time
                     time.sleep(2)
                 break
@@ -576,13 +575,13 @@ class EvacuationSimulation():
             results = self.step()
 
             # Track reached targets for visualization
-            for agent_id, result in results:
-                if result == 'New Target Set':
-                    # Find the agent and add their previous target to reached targets
-                    for agent in self.agents:
-                        if agent.id == agent_id and agent.targetidx > 0:
-                            prev_target = self.targets[agent.targetidx - 1]
-                            reached_targets.add(prev_target)
+            # for agent_id, result in results:
+            #     if result == 'New Target Set':
+            #         # Find the agent and add their previous target to reached targets
+            #         for agent in self.agents:
+            #             if agent.id == agent_id and agent.targetidx > 0:
+            #                 prev_target = self.targets[agent.targetidx - 1]
+            #                 reached_targets.add(prev_target)
 
             # Update fire model at specified interval (decoupled from agent movement)
             if self.steps % self.config.fire_update_interval == 0:
@@ -593,14 +592,13 @@ class EvacuationSimulation():
             # Handle visualization updates
             if visualizer:
                 if use_matlab and MATLAB_VISUALIZER_AVAILABLE:
-                    import numpy as np
                     fire_state_array = np.array(self.shared_fire_map)
-                    if not visualizer.update_display(self.steps, self.agents, self.targets, fire_state_array, status):
+                    if not visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status):
                         break  # User closed window
                 else:
-                    if not visualizer.update_display(self.steps, self.agents, self.targets, status, reached_targets):
+                    if not visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets):
                         break  # User closed window
-                visualizer.wait_for_next_frame(fps=5)  # 5 FPS for better visibility
+                visualizer.wait_for_next_frame(fps=10)  # 10 FPS for better visibility
             else:
                 # Show text visualization every few steps or when significant events occur
                 show_this_step = False
@@ -658,5 +656,5 @@ if __name__ == "__main__":
         max_steps=500, 
         show_visualization=False, 
         use_pygame=False, 
-        use_matlab=False
+        use_matlab=True
         )

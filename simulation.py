@@ -144,12 +144,13 @@ class EvacuationAgent():
 
             self.k_m = 0
             self.queue = []
+            self.queue_set = set()  # Track queue membership for O(1) lookups
 
             try:
                 # Set start and goal positions on the graph before initializing D* Lite
                 self.graph.setStart(start)
                 self.graph.setGoal(self.target)
-                self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, start, self.target, self.k_m)
+                self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, start, self.target, self.k_m)
             except Exception as e:
                 raise ValueError(f"Agent {id}: Failed to initialize D* Lite from {start} to {self.target}: {e}")
 
@@ -188,7 +189,7 @@ class EvacuationAgent():
                 self.graph.setGoal(self.target)
                 # Reinitialize D* Lite for the new target
                 self.queue, self.k_m = self.graph.reset_for_new_planning()
-                self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
+                self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
             except Exception as e:
                 print(f"Error: Agent {self.id} failed to re-initialize D* Lite after door replanning: {e}")
                 return 'Replanning Error'
@@ -254,14 +255,14 @@ class EvacuationAgent():
                 # print(f"Cycle detected at {self.s_current}! Forcing rescan...")
                 # Force a more aggressive rescan to break the cycle
                 try:
-                    scanForObstacles(self.graph, self.queue, self.s_current, self.VIEWING_RANGE * 2, self.k_m)
-                    computeShortestPath(self.graph, self.queue, self.s_current, self.k_m)
+                    scanForObstacles(self.graph, self.queue, self.queue_set, self.s_current, self.VIEWING_RANGE * 2, self.k_m)
+                    computeShortestPath(self.graph, self.queue, self.queue_set, self.s_current, self.k_m)
                 except Exception as e:
                     print(f"Warning: Failed to perform cycle detection rescan for agent {self.id}: {e}")
                     # Continue with normal movement even if rescan fails
 
             try:
-                self.s_new, self.k_m = moveAndRescan(self.graph, self.queue, self.s_current, self.VIEWING_RANGE, self.k_m, self.occupancy, self.max_occupancy)
+                self.s_new, self.k_m = moveAndRescan(self.graph, self.queue, self.queue_set, self.s_current, self.VIEWING_RANGE, self.k_m, self.occupancy, self.max_occupancy)
             except Exception as e:
                 print(f"Error: Failed to move agent {self.id} from {self.s_current}: {e}")
                 return f'Movement Error: {e}'
@@ -286,7 +287,7 @@ class EvacuationAgent():
                     return 'Evacuated'
                 try:
                     self.queue, self.k_m = self.graph.reset_for_new_planning()
-                    self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
+                    self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
                 except Exception as e:
                     print(f"Error: Failed to initialize new path for agent {self.id} to target {self.target}: {e}")
                     return f'Path Planning Error: {e}'
@@ -321,7 +322,7 @@ class EvacuationAgent():
 
         self.graph.updateGraphFromTerrain()
         self.graph.reset_for_new_planning()
-        self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, self.s_current, self.targets[self.targetidx], self.k_m)
+        self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.targets[self.targetidx], self.k_m)
         self.graph.setStart(self.s_current)
         self.graph.setGoal(self.targets[self.targetidx])
 

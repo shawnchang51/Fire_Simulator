@@ -76,8 +76,9 @@ if __name__ == "__main__":
     k_m = 0
     s_last = s_start
     queue = []
+    queue_set = set()
 
-    graph, queue, k_m = initDStarLite(graph, queue, s_start, s_goal, k_m)
+    graph, queue, k_m, queue_set = initDStarLite(graph, queue, s_start, s_goal, k_m)
 
     s_current = s_start
     pos_coords = stateNameToCoords(s_current)
@@ -92,8 +93,10 @@ if __name__ == "__main__":
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_RIGHT:
                     # print('space bar! call next action')
+                    # Note: main.py doesn't have occupancy, so we pass empty lists as placeholders
+                    occupancy = [[0 for _ in range(X_DIM)] for _ in range(Y_DIM)]
                     s_new, k_m = moveAndRescan(
-                        graph, queue, s_current, VIEWING_RANGE, k_m)
+                        graph, queue, queue_set, s_current, VIEWING_RANGE, k_m, occupancy, 999)
                     if s_new == 'goal':
                         print('Goal Reached!')
                         done = True

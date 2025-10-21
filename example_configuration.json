@@ -10,6 +10,7 @@
   "timestep_duration": 0.5,
   "fire_update_interval": 2,
   "fire_model_type": "aggressive",
+  "consider_env_factors": true,
   "start_positions": [
     "x48y47",
     "x11y50",

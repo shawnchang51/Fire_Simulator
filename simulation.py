@@ -66,6 +66,7 @@ class SimulationConfig:
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
     door_configs: list[dict] = None  # Optional door configurations
+    consider_env_factors: bool = False  # Whether agents consider temperature and smoke in pathfinding
 
     @classmethod
     def from_json(cls, json_data):
@@ -82,7 +83,8 @@ class SimulationConfig:
             fire_update_interval=json_data.get('fire_update_interval', 4),
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
             agent_fearness=json_data.get('agent_fearness', []),
-            door_configs=json_data.get('door_configs', [])
+            door_configs=json_data.get('door_configs', []),
+            consider_env_factors=json_data.get('consider_env_factors', False)
         )
 
         # Auto-scale viewing_range based on cell_size if it seems too small
@@ -96,7 +98,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=5, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False):
         try:
             self.id = id
             self.start = start
@@ -111,6 +113,7 @@ class EvacuationAgent():
             self.peak_temp = 0.0
             self.total_steps = 0
             self.fire_model = fire_model
+            self.consider_env_factors = consider_env_factors
 
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
@@ -166,6 +169,45 @@ class EvacuationAgent():
     def estimate_fire(self, current_location=None, fire_fearness=None):
         _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph.cells, current_location if current_location is not None else self.s_current, estimate_fire=True)
         return fire_mean*fire_fearness if fire_fearness is not None else fire_mean*self.fire_fearness
+
+    def calculate_environmental_cost(self, row, col):
+        """
+        Calculate combined environmental cost considering fire intensity, temperature, and smoke.
+        Returns a cost value that will be used to update the graph cells.
+        """
+        if not self.consider_env_factors or self.fire_model is None:
+            # If not considering environmental factors, return the current cell value unchanged
+            return self.graph.cells[row][col]
+
+        # Get base fire intensity from current cell value
+        base_fire = max(0, self.graph.cells[row][col]) if self.graph.cells[row][col] >= 0 else self.graph.cells[row][col]
+
+        # Get temperature and smoke from fire model
+        try:
+            temperature = self.fire_model.temperature_map[row][col]
+            smoke = self.fire_model.smoke_density[row][col]
+        except (AttributeError, IndexError):
+            # If fire model doesn't have these attributes, just return base fire
+            return base_fire
+
+        # Temperature contribution: normalize temperature above ambient (20°C)
+        # High temps (>100°C) should significantly increase cost
+        temp_cost = 0.0
+        if temperature > 20.0:
+            # Scale: 20-100°C -> 0-1.6, 100-200°C -> 1.6-3.6, etc.
+            temp_cost = (temperature - 20.0) / 50.0
+
+        # Smoke contribution: smoke density is typically 0-1 range
+        # High smoke reduces visibility and breathability
+        smoke_cost = smoke * 2.0  # Amplify smoke impact
+
+        # Combine costs: base fire + temperature + smoke
+        # If cell is an obstacle (negative value), preserve it
+        if base_fire < 0:
+            return base_fire  # Keep obstacles as-is
+        else:
+            combined_cost = base_fire + temp_cost + smoke_cost
+            return combined_cost
 
     def update_lazy_graph(self, current_location=None):
         try:
@@ -329,6 +371,17 @@ class EvacuationAgent():
             except Exception as e:
                 print(f"Warning: Agent {self.id} failed to process graph update for {coord}: {e}")
 
+        # If considering environmental factors, update all cells with environmental costs
+        if self.consider_env_factors and self.fire_model is not None:
+            try:
+                for y in range(self.graph.y_dim):
+                    for x in range(self.graph.x_dim):
+                        # Calculate and apply environmental cost for each cell
+                        env_cost = self.calculate_environmental_cost(y, x)
+                        self.graph.cells[y][x] = env_cost
+            except Exception as e:
+                print(f"Warning: Agent {self.id} failed to apply environmental costs: {e}")
+
         self.graph.updateGraphFromTerrain()
         self.graph.reset_for_new_planning()
         self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.targets[self.targetidx], self.k_m)
@@ -387,7 +440,7 @@ class EvacuationSimulation():
                 if config.agent_fearness and i < len(config.agent_fearness):
                     fearness = config.agent_fearness[i]
                 try:
-                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph, fire_model = self.model)
+                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph, fire_model=self.model, consider_env_factors=config.consider_env_factors)
                     self.agents.append(agent)
                 except Exception as e:
                     print(f"Failed to initialize agent {i}: {e}")

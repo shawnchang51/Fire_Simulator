@@ -21,18 +21,15 @@ Author: Fire Evacuation Simulation System
 """
 
 import pretty_errors
-import random
+import time
 import os
 from d_star_lite.grid import GridWorld
 from d_star_lite.utils import stateNameToCoords
 from d_star_lite.d_star_lite import initDStarLite, moveAndRescan, set_OBS_VAL, scanForObstacles, computeShortestPath
 from dataclasses import dataclass
-from fire_model_float import simulate_fire_spread
 from door_graph import build_door_graph, replan_path, find_door_id_by_position, update_room_edge_weights, DoorGraph
 import json
-from fire_model_float import create_fire_model
 from fire_monitor import FireMonitor
-from snapshot_ainmator import RealtimeGridAnimator
 from datetime import datetime
 import argparse
 import copy
@@ -332,8 +329,8 @@ class EvacuationAgent():
 
 class EvacuationSimulation():
     def __init__(self, config: SimulationConfig):
-        # Set the obstacle value to match fire (-1)
-        set_OBS_VAL(-1)
+        # Set the obstacle value to match fire (-2)
+        set_OBS_VAL(-2)
         self.evacuated_agents = []
         self.progress = {i: 0 for i in range(config.agent_num)}
         self.config = config  # Store config for fire update interval
@@ -505,6 +502,7 @@ class EvacuationSimulation():
         
 
     def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False) -> dict:
+        self.simulation_results= dict()       
         self.steps = 0
         visualizer = None
         reached_targets = set()
@@ -572,7 +570,6 @@ class EvacuationSimulation():
                         visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status)
                     else:
                         visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets)
-                    import time
                     time.sleep(2)
                 break
             elif self.steps >= max_steps:
@@ -627,7 +624,9 @@ class EvacuationSimulation():
         if visualizer:
             visualizer.close()
         
-        return self.path_count
+        self.simulation_results['path_count'] = self.path_count
+        
+        return self.simulation_results
 
 if __name__ == "__main__":
     # Example configuration

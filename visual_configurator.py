@@ -77,6 +77,10 @@ class VisualConfigurator:
         self.canvas_offset_y = 0
         self.zoom_level = 1.0
 
+        # Line tool state
+        self.line_start = None  # First click position for line tool
+        self.line_preview_id = None  # Canvas ID for line preview
+
         # Undo/Redo stacks
         self.undo_stack = []
         self.redo_stack = []
@@ -176,6 +180,7 @@ class VisualConfigurator:
             ('door', 'Door', COLORS['door']),
             ('exit', 'Exit', COLORS['exit']),
             ('obstacle', 'Obstacle', COLORS['obstacle']),
+            ('line', 'Line', '#795548'),  # Brown for line tool
             ('fire', 'Fire', COLORS['fire']),
             ('edit', 'Edit', '#9c27b0'),  # Purple for edit tool
             ('erase', 'Erase', COLORS['passable']),
@@ -511,6 +516,13 @@ class VisualConfigurator:
 
     def select_tool(self, tool_id):
         """Select a drawing tool."""
+        # Reset line tool state if switching away from line tool
+        if self.current_tool == 'line' and tool_id != 'line':
+            self.line_start = None
+            if self.line_preview_id:
+                self.canvas.delete(self.line_preview_id)
+                self.line_preview_id = None
+
         self.current_tool = tool_id
 
         # Update button appearance
@@ -526,6 +538,7 @@ class VisualConfigurator:
             'door': 'Door',
             'exit': 'Exit',
             'obstacle': 'Obstacle',
+            'line': 'Line (click two cells to draw)',
             'fire': 'Fire',
             'edit': 'Edit Cell',
             'erase': 'Eraser'
@@ -659,6 +672,11 @@ class VisualConfigurator:
             self.edit_cell(col, row)
             return
 
+        # Line tool uses two-click system
+        if self.current_tool == 'line':
+            self.handle_line_click(col, row)
+            return
+
         self.save_state_for_undo()
 
         if self.current_tool == 'agent_start':
@@ -677,7 +695,16 @@ class VisualConfigurator:
         self.update_grid_display()
 
     def on_canvas_right_click(self, event):
-        """Handle right-click (delete)."""
+        """Handle right-click (delete or cancel line)."""
+        # If line tool is active and first point is selected, cancel the line
+        if self.current_tool == 'line' and self.line_start is not None:
+            self.line_start = None
+            if self.line_preview_id:
+                self.canvas.delete(self.line_preview_id)
+                self.line_preview_id = None
+            self.update_status("Line drawing cancelled. Click to start a new line.")
+            return
+
         col, row = self.get_grid_coords(event.x, event.y)
         if col is None or row is None:
             return
@@ -690,15 +717,27 @@ class VisualConfigurator:
         """Handle mouse hover over canvas."""
         if event is None:
             self.hover_cell = None
+            if self.line_preview_id:
+                self.canvas.delete(self.line_preview_id)
+                self.line_preview_id = None
             self.update_status("Ready")
             return
 
         col, row = self.get_grid_coords(event.x, event.y)
         if col is not None and row is not None:
             self.hover_cell = (col, row)
-            self.update_status(f"Cell: ({col}, {row}) | Value: {self.grid_data[row][col]}")
+
+            # Show line preview if line tool is active and first point is selected
+            if self.current_tool == 'line' and self.line_start is not None:
+                self.draw_line_preview(self.line_start[0], self.line_start[1], col, row)
+                self.update_status(f"Click second cell to complete line | Currently: ({col}, {row})")
+            else:
+                self.update_status(f"Cell: ({col}, {row}) | Value: {self.grid_data[row][col]}")
         else:
             self.hover_cell = None
+            if self.line_preview_id:
+                self.canvas.delete(self.line_preview_id)
+                self.line_preview_id = None
 
     def get_grid_coords(self, canvas_x, canvas_y):
         """Convert canvas coordinates to grid coordinates."""
@@ -769,6 +808,91 @@ class VisualConfigurator:
         position = f"x{col}y{row}"
         self.doors = [d for d in self.doors if d['position'] != position]
         self.exits = [e for e in self.exits if e['position'] != position]
+
+    def handle_line_click(self, col, row):
+        """Handle line tool clicks (two-click system)."""
+        if self.line_start is None:
+            # First click - set start point
+            self.line_start = (col, row)
+            self.update_status(f"Line start set at ({col}, {row}). Click second cell to complete line.")
+        else:
+            # Second click - draw line
+            self.save_state_for_undo()
+            start_col, start_row = self.line_start
+            self.draw_line(start_col, start_row, col, row)
+
+            # Reset line tool state
+            self.line_start = None
+            if self.line_preview_id:
+                self.canvas.delete(self.line_preview_id)
+                self.line_preview_id = None
+
+            self.update_grid_display()
+            self.update_status(f"Line drawn from ({start_col}, {start_row}) to ({col}, {row})")
+
+    def draw_line(self, x0, y0, x1, y1):
+        """Draw a line of obstacles using Bresenham's line algorithm."""
+        cells = self.get_line_cells(x0, y0, x1, y1)
+        for col, row in cells:
+            if 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
+                self.grid_data[row][col] = -2
+                self.remove_elements_at(col, row)
+
+    def get_line_cells(self, x0, y0, x1, y1):
+        """Get all cells along a line using Bresenham's algorithm."""
+        cells = []
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+
+        x, y = x0, y0
+
+        while True:
+            cells.append((x, y))
+
+            if x == x1 and y == y1:
+                break
+
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+        return cells
+
+    def draw_line_preview(self, x0, y0, x1, y1):
+        """Draw a preview of the line on the canvas."""
+        # Remove old preview
+        if self.line_preview_id:
+            self.canvas.delete(self.line_preview_id)
+
+        # Get cells that will be affected
+        cells = self.get_line_cells(x0, y0, x1, y1)
+
+        # Draw preview rectangles
+        for col, row in cells:
+            x1_px = col * self.cell_pixel_size
+            y1_px = row * self.cell_pixel_size
+            x2_px = x1_px + self.cell_pixel_size
+            y2_px = y1_px + self.cell_pixel_size
+
+            # Create a semi-transparent preview
+            self.canvas.create_rectangle(
+                x1_px, y1_px, x2_px, y2_px,
+                fill='#795548',  # Brown color matching line tool
+                stipple='gray50',  # Semi-transparent effect
+                outline='#ff9800',  # Orange outline for visibility
+                width=2,
+                tags='line_preview'
+            )
+
+        # Store tag instead of individual IDs
+        self.line_preview_id = 'line_preview'
 
     def edit_cell(self, col, row):
         """Open edit dialog for a cell."""

@@ -96,7 +96,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=5, fire_fearness=1.0, base_door_graph: DoorGraph=None):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=5, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None):
         try:
             self.id = id
             self.start = start
@@ -107,6 +107,10 @@ class EvacuationAgent():
             self.fire_fearness = fire_fearness
             self.door_graph = copy.deepcopy(base_door_graph)
             self.door_path = []
+            self.average_temp = 0.0
+            self.peak_temp = 0.0
+            self.total_steps = 0
+            self.fire_model = fire_model
 
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
@@ -244,13 +248,17 @@ class EvacuationAgent():
             return f'Critical Target Setting Error: {e}'
     
     def move(self):
+        self.total_steps += 1
         coord_current = stateNameToCoords(self.s_current)
         if(self.graph.cells[coord_current[1]][coord_current[0]] < 0):
             print(f"Warning: Agent {self.id} starting on an obstacle at {self.s_current}!")
             return 'stuck'
         else:
             self.fire_damage += self.graph.cells[coord_current[1]][coord_current[0]]
-        
+            temp = self.fire_model.temperature_map[coord_current[1]][coord_current[0]]
+            self.average_temp = (self.average_temp * (self.total_steps - 1) + temp) / self.total_steps
+            self.peak_temp = max(self.peak_temp, temp)
+                    
         try:
             if self.s_current in self.position_history[-3:]:  # Check last 3 positions
                 # print(f"Cycle detected at {self.s_current}! Forcing rescan...")
@@ -334,7 +342,10 @@ class EvacuationSimulation():
         self.evacuated_agents = []
         self.progress = {i: 0 for i in range(config.agent_num)}
         self.config = config  # Store config for fire update interval
+
         self.path_count = dict()
+        self.average_fire_damage = 0.0
+        self.survived_agents = 0
 
         # Initialize fire model based on selected type
         if config.fire_model_type == "realistic":
@@ -367,7 +378,7 @@ class EvacuationSimulation():
             if not self.occupancy or len(self.occupancy) != self.map_rows or any(len(row) != self.map_cols for row in self.occupancy):
                 raise ValueError("Occupancy grid dimensions do not match specified map dimensions")
 
-            self.agents = []
+            self.agents: list[EvacuationAgent] = []
             self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs)
             for i in range(self.agent_num):
                 start_pos = config.start_positions[i]  # Example start positions; modify as needed
@@ -376,7 +387,7 @@ class EvacuationSimulation():
                 if config.agent_fearness and i < len(config.agent_fearness):
                     fearness = config.agent_fearness[i]
                 try:
-                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph)
+                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph, fire_model = self.model)
                     self.agents.append(agent)
                 except Exception as e:
                     print(f"Failed to initialize agent {i}: {e}")
@@ -392,6 +403,19 @@ class EvacuationSimulation():
         #     print(f"Warning: Failed to initialize real-time grid animators: {e}")
         #     self.anim = None
 
+    def check_agent_survival(self, agent: EvacuationAgent) -> bool:
+        # Define survival criteria based on fire damage and temperature thresholds
+        MAX_FIRE_DAMAGE = 100.0  # Example threshold
+        MAX_PEAK_TEMP = 150.0    # Example threshold in Celsius
+        MAX_AVERAGE_TEMP = 100.0   # Example threshold in Celsius
+
+        survived = agent.fire_damage < MAX_FIRE_DAMAGE and agent.peak_temp < MAX_PEAK_TEMP and agent.average_temp < MAX_AVERAGE_TEMP
+        if survived:
+            print(f"Agent {agent.id} survived evacuation with fire damage {agent.fire_damage:.2f}, peak temp {agent.peak_temp:.2f}C, and average temp {agent.average_temp:.2f}C.")
+        else:
+            print(f"Agent {agent.id} did NOT survive evacuation! Fire damage: {agent.fire_damage:.2f}, Peak temp: {agent.peak_temp:.2f}C, Average temp: {agent.average_temp:.2f}C.")
+        return survived
+
     def step(self):
         results = []
         for agent in self.agents:
@@ -401,9 +425,22 @@ class EvacuationSimulation():
                 if result == 'Evacuated':
                     self.evacuated_agents.append(agent.id)
                     print(f"Agent {agent.id} has evacuated successfully.")
+                    survived = self.check_agent_survival(agent)
+                    if survived:
+                        self.survived_agents += 1
+                    self.path_count[tuple(agent.door_path)] = self.path_count.get(tuple(agent.door_path), 0) + 1
+                    # Update average fire damage and temperatures
+                    if len(self.evacuated_agents) == 1:
+                        self.average_fire_damage = agent.fire_damage
+                        self.average_peak_temp = agent.peak_temp
+                        self.average_avg_temp = agent.average_temp
+                    else:
+                        self.average_fire_damage = self.average_fire_damage*(len(self.evacuated_agents)-1)/len(self.evacuated_agents) + agent.fire_damage/len(self.evacuated_agents)
+                        self.average_peak_temp = self.average_peak_temp*(len(self.evacuated_agents)-1)/len(self.evacuated_agents) + agent.peak_temp/len(self.evacuated_agents)
+                        self.average_avg_temp = self.average_avg_temp*(len(self.evacuated_agents)-1)/len(self.evacuated_agents) + agent.average_temp/len(self.evacuated_agents)
                     # Remove the agent from the simulation
                     self.agents.remove(agent)
-                    self.path_count[tuple(agent.door_path)] = self.path_count.get(tuple(agent.door_path), 0) + 1
+                     
                 elif result == 'New Target Set':
                     print(f"Agent {agent.id} reached target and is setting new target {agent.target}.")
                     self.progress[agent.id] += 1
@@ -625,6 +662,12 @@ class EvacuationSimulation():
             visualizer.close()
         
         self.simulation_results['path_count'] = self.path_count
+        self.simulation_results['steps'] = self.steps
+        self.simulation_results['average_fire_damage'] = self.average_fire_damage
+        self.simulation_results['average_peak_temp'] = self.average_peak_temp
+        self.simulation_results['average_avg_temp'] = self.average_avg_temp
+        self.simulation_results['evacuated_agents'] = len(self.evacuated_agents)
+        self.simulation_results['survived_agents'] = self.survived_agents
         
         return self.simulation_results
 

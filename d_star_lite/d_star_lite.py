@@ -8,12 +8,11 @@ def set_OBS_VAL(val):
     OBS_VAL = val
 
 def topKey(queue):
-    queue.sort()
-    # print(queue)
+    # Heap property guarantees queue[0] is minimum - no need to sort!
+    # Sorting was breaking the heap structure and causing O(n log n) overhead
     if len(queue) > 0:
         return queue[0][:2]
     else:
-        # print('empty queue!')
         return (float('inf'), float('inf'))
 
 
@@ -27,7 +26,7 @@ def calculateKey(graph, id, s_current, k_m):
     return (min(graph.graph[id].g, graph.graph[id].rhs) + heuristic_from_s(graph, id, s_current) + k_m, min(graph.graph[id].g, graph.graph[id].rhs))
 
 
-def updateVertex(graph, queue, id, s_current, k_m):
+def updateVertex(graph, queue, queue_set, id, s_current, k_m):
     s_goal = graph.goal
     if id != s_goal:
         min_rhs = float('inf')
@@ -35,36 +34,39 @@ def updateVertex(graph, queue, id, s_current, k_m):
             min_rhs = min(
                 min_rhs, graph.graph[i].g + graph.graph[id].children[i])
         graph.graph[id].rhs = min_rhs
-    id_in_queue = [item for item in queue if id in item]
-    if id_in_queue != []:
-        if len(id_in_queue) != 1:
-            raise ValueError('more than one ' + id + ' in the queue!')
-        queue.remove(id_in_queue[0])
+
+    # Use set for O(1) membership check instead of O(n) list comprehension
+    # We use lazy deletion: just remove from set, stale entries in heap are skipped during pop
+    if id in queue_set:
+        queue_set.discard(id)
+
     if graph.graph[id].rhs != graph.graph[id].g:
         heapq.heappush(queue, calculateKey(graph, id, s_current, k_m) + (id,))
+        queue_set.add(id)
 
 
-def computeShortestPath(graph, queue, s_start, k_m):
+def computeShortestPath(graph, queue, queue_set, s_start, k_m):
     while (graph.graph[s_start].rhs != graph.graph[s_start].g) or (topKey(queue) < calculateKey(graph, s_start, s_start, k_m)):
-        # print(graph.graph[s_start])
-        # print('topKey')
-        # print(topKey(queue))
-        # print('calculateKey')
-        # print(calculateKey(graph, s_start, 0))
         k_old = topKey(queue)
         u = heapq.heappop(queue)[2]
+
+        # Lazy deletion: skip stale entries that were already removed from queue_set
+        if u not in queue_set:
+            continue
+        queue_set.discard(u)
+
         if k_old < calculateKey(graph, u, s_start, k_m):
             heapq.heappush(queue, calculateKey(graph, u, s_start, k_m) + (u,))
+            queue_set.add(u)
         elif graph.graph[u].g > graph.graph[u].rhs:
             graph.graph[u].g = graph.graph[u].rhs
             for i in graph.graph[u].parents:
-                updateVertex(graph, queue, i, s_start, k_m)
+                updateVertex(graph, queue, queue_set, i, s_start, k_m)
         else:
             graph.graph[u].g = float('inf')
-            updateVertex(graph, queue, u, s_start, k_m)
+            updateVertex(graph, queue, queue_set, u, s_start, k_m)
             for i in graph.graph[u].parents:
-                updateVertex(graph, queue, i, s_start, k_m)
-        # graph.printGValues()
+                updateVertex(graph, queue, queue_set, i, s_start, k_m)
 
 
 def nextInShortestPath(graph, s_current):
@@ -91,7 +93,7 @@ def nextInShortestPath(graph, s_current):
         return "stuck"
 
 
-def scanForObstacles(graph, queue, s_current, scan_range, k_m):
+def scanForObstacles(graph, queue, queue_set, s_current, scan_range, k_m):
     states_to_update = {}
     range_checked = 0
     if scan_range >= 1:
@@ -100,7 +102,6 @@ def scanForObstacles(graph, queue, s_current, scan_range, k_m):
             states_to_update[neighbor] = graph.cells[neighbor_coords[1]
                                                      ][neighbor_coords[0]]
         range_checked = 1
-    # print(states_to_update)
 
     while range_checked < scan_range:
         new_set = {}
@@ -117,7 +118,6 @@ def scanForObstacles(graph, queue, s_current, scan_range, k_m):
     new_obstacle = False
     for state in states_to_update:
         if states_to_update[state] < 0:  # found cell with obstacle
-            # print('found obstacle in ', state)
             for neighbor in graph.graph[state].children:
                 # first time to observe this obstacle where one wasn't before
                 if(graph.graph[state].children[neighbor] != float('inf')):
@@ -125,26 +125,22 @@ def scanForObstacles(graph, queue, s_current, scan_range, k_m):
                     graph.cells[neighbor_coords[1]][neighbor_coords[0]] = -2
                     graph.graph[neighbor].children[state] = float('inf')
                     graph.graph[state].children[neighbor] = float('inf')
-                    updateVertex(graph, queue, state, s_current, k_m)
+                    updateVertex(graph, queue, queue_set, state, s_current, k_m)
                     new_obstacle = True
-        # elif states_to_update[state] == 0: #cell without obstacle
-            # for neighbor in graph.graph[state].children:
-                # if(graph.graph[state].children[neighbor] != float('inf')):
 
-    # print(graph)
     return new_obstacle
 
 
-def moveAndRescan(graph, queue, s_current, scan_range, k_m, occupancy, max_occupancy):
+def moveAndRescan(graph, queue, queue_set, s_current, scan_range, k_m, occupancy, max_occupancy):
     if(s_current == graph.goal):
         return 'goal', k_m
     else:
         s_last = s_current
 
         # First, scan for obstacles and replan - this is the core of D* Lite
-        results = scanForObstacles(graph, queue, s_current, scan_range, k_m)
+        results = scanForObstacles(graph, queue, queue_set, s_current, scan_range, k_m)
         k_m += heuristic_from_s(graph, s_last, s_current)
-        computeShortestPath(graph, queue, s_current, k_m)
+        computeShortestPath(graph, queue, queue_set, s_current, k_m)
 
         # Now try to find the next move after replanning
         s_new = nextInShortestPath(graph, s_current)
@@ -165,9 +161,11 @@ def moveAndRescan(graph, queue, s_current, scan_range, k_m, occupancy, max_occup
 
 
 def initDStarLite(graph, queue, s_start, s_goal, k_m):
+    queue_set = set()  # Initialize the queue membership tracking set
     graph.graph[s_goal].rhs = 0
     heapq.heappush(queue, calculateKey(
         graph, s_goal, s_start, k_m) + (s_goal,))
-    computeShortestPath(graph, queue, s_start, k_m)
+    queue_set.add(s_goal)
+    computeShortestPath(graph, queue, queue_set, s_start, k_m)
 
-    return (graph, queue, k_m)
+    return (graph, queue, k_m, queue_set)

@@ -20,6 +20,7 @@ FIRE MODEL OPTIONS:
 Author: Fire Evacuation Simulation System
 """
 
+import pretty_errors
 import random
 import os
 from d_star_lite.grid import GridWorld
@@ -27,12 +28,15 @@ from d_star_lite.utils import stateNameToCoords
 from d_star_lite.d_star_lite import initDStarLite, moveAndRescan, set_OBS_VAL, scanForObstacles, computeShortestPath
 from dataclasses import dataclass
 from fire_model_float import simulate_fire_spread
+from door_graph import build_door_graph, replan_path, find_door_id_by_position, update_room_edge_weights, DoorGraph
 import json
 from fire_model_float import create_fire_model
 from fire_monitor import FireMonitor
 from snapshot_ainmator import RealtimeGridAnimator
 from datetime import datetime
 import argparse
+import copy
+import numpy as np
 
 try:
     from pygame_visualizer import EvacuationVisualizer
@@ -55,7 +59,6 @@ class SimulationConfig:
     map_cols: int
     max_occupancy: int
     start_positions: list[str]
-    targets: list[str]
     initial_fire_map: list[list[float]]
     agent_num: int
     viewing_range: int = 5
@@ -65,6 +68,7 @@ class SimulationConfig:
     fire_update_interval: int = 4  # update fire every N timesteps (default: 4 timesteps = 2 seconds)
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
+    door_configs: list[dict] = None  # Optional door configurations
 
     @classmethod
     def from_json(cls, json_data):
@@ -73,7 +77,6 @@ class SimulationConfig:
             map_cols=json_data['map_cols'],
             max_occupancy=json_data['max_occupancy'],
             start_positions=json_data['start_positions'],
-            targets=json_data['targets'],
             initial_fire_map=json_data.get('initial_fire_map', [[0 for _ in range(json_data['map_cols'])] for _ in range(json_data['map_rows'])]),
             agent_num=json_data['agent_num'],
             viewing_range=json_data.get('viewing_range', 5),
@@ -81,7 +84,8 @@ class SimulationConfig:
             timestep_duration=json_data.get('timestep_duration', 0.5),
             fire_update_interval=json_data.get('fire_update_interval', 4),
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
-            agent_fearness=json_data.get('agent_fearness', None)
+            agent_fearness=json_data.get('agent_fearness', []),
+            door_configs=json_data.get('door_configs', [])
         )
 
         # Auto-scale viewing_range based on cell_size if it seems too small
@@ -95,7 +99,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, targets: list[str], viewing_range=5, fire_fearness=1.0):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=5, fire_fearness=1.0, base_door_graph: DoorGraph=None):
         try:
             self.id = id
             self.start = start
@@ -104,15 +108,24 @@ class EvacuationAgent():
             self.VIEWING_RANGE = viewing_range
             self.fire_damage = 0
             self.fire_fearness = fire_fearness
-
-            # Validate inputs
-            if not targets or len(targets) == 0:
-                raise ValueError(f"Agent {id}: targets list cannot be empty")
+            self.door_graph = copy.deepcopy(base_door_graph)
+            self.door_path = []
 
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
             except Exception as e:
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_rows}x{map_cols}: {e}")
+
+            path = replan_path(self.door_graph, start, self.graph.cells)
+            print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
+            print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
+            if path is None:
+                raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
+
+            self.targetidx = 0
+            self.targets = [self.door_graph.nodes[node].position for node in path]
+            self.target = self.targets[self.targetidx]
+            # door_path will be populated as agent reaches each door/exit
 
             try:
                 start_coords = stateNameToCoords(start)
@@ -130,18 +143,15 @@ class EvacuationAgent():
             except IndexError as e:
                 raise ValueError(f"Agent {id}: Cannot access grid cell at {start_coords}: {e}")
 
-            self.targetidx = 0
-            self.targets = targets
-            self.target = targets[self.targetidx]
-
             self.k_m = 0
             self.queue = []
+            self.queue_set = set()  # Track queue membership for O(1) lookups
 
             try:
                 # Set start and goal positions on the graph before initializing D* Lite
                 self.graph.setStart(start)
                 self.graph.setGoal(self.target)
-                self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, start, self.target, self.k_m)
+                self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, start, self.target, self.k_m)
             except Exception as e:
                 raise ValueError(f"Agent {id}: Failed to initialize D* Lite from {start} to {self.target}: {e}")
 
@@ -152,11 +162,65 @@ class EvacuationAgent():
             print(f"Critical error initializing agent {id}: {e}")
             raise
 
-    def set_next_target(self, current_location):
+    def estimate_fire(self, current_location=None, fire_fearness=None):
+        _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph.cells, current_location if current_location is not None else self.s_current, estimate_fire=True)
+        return fire_mean*fire_fearness if fire_fearness is not None else fire_mean*self.fire_fearness
+
+    def update_lazy_graph(self, current_location=None):
         try:
+            fire_estimate = self.estimate_fire(current_location, self.fire_fearness)
+            update_room_edge_weights(self.graph.cells, self.door_graph, current_location, fire_estimate)
+        except Exception as e:
+            print(f"Error: Agent {self.id} failed to update lazy graph at {self.s_current}: {e}")
+            raise
+    
+    def replan_door_path(self, current_location):
+        try:
+            path = replan_path(self.door_graph, current_location, self.graph.cells)
+            if path is None:
+                print(f"Warning: Agent {self.id} could not find a new door path from {current_location}")
+                return 'No Door Path'
+
+            self.targets = [self.door_graph.nodes[node].position for node in path]
+            self.targetidx = 0
+            self.target = self.targets[self.targetidx]
+
+            try:
+                self.graph.setStart(self.s_current)
+                self.graph.setGoal(self.target)
+                # Reinitialize D* Lite for the new target
+                self.queue, self.k_m = self.graph.reset_for_new_planning()
+                self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
+            except Exception as e:
+                print(f"Error: Agent {self.id} failed to re-initialize D* Lite after door replanning: {e}")
+                return 'Replanning Error'
+
+            return None
+
+        except Exception as e:
+            print(f"Critical error in replan_door_path() for agent {self.id}: {e}")
+            return f'Critical Replanning Error: {e}'
+
+    def set_next_target(self, current_location, replan=False):
+        try:
+            # Record the door that was just reached (before incrementing targetidx)
+            self.door_path.append(current_location)
+
             self.targetidx += 1
-            if self.targetidx >= len(self.targets):
+            current_id = find_door_id_by_position(self.door_graph, current_location)
+            current_type = self.door_graph.nodes[current_id].type if current_id in self.door_graph.nodes else None
+            if self.targetidx >= len(self.targets) or current_type == 'exit':
                 return 'Evacuated'
+            elif replan:
+                x, y = stateNameToCoords(current_location)
+                lx, ly = stateNameToCoords(self.position_history[-1]) if self.position_history else (None, None)
+                x = x + x - lx if lx is not None else x
+                y = y + y - ly if ly is not None else y
+                not_door_location = f'x{x}y{y}'
+                self.update_lazy_graph(not_door_location)
+                result = self.replan_door_path(not_door_location)
+                if result is not None:
+                    return result
             else:
                 try:
                     self.target = self.targets[self.targetidx]
@@ -195,14 +259,14 @@ class EvacuationAgent():
                 # print(f"Cycle detected at {self.s_current}! Forcing rescan...")
                 # Force a more aggressive rescan to break the cycle
                 try:
-                    scanForObstacles(self.graph, self.queue, self.s_current, self.VIEWING_RANGE * 2, self.k_m)
-                    computeShortestPath(self.graph, self.queue, self.s_current, self.k_m)
+                    scanForObstacles(self.graph, self.queue, self.queue_set, self.s_current, self.VIEWING_RANGE * 2, self.k_m)
+                    computeShortestPath(self.graph, self.queue, self.queue_set, self.s_current, self.k_m)
                 except Exception as e:
                     print(f"Warning: Failed to perform cycle detection rescan for agent {self.id}: {e}")
                     # Continue with normal movement even if rescan fails
 
             try:
-                self.s_new, self.k_m = moveAndRescan(self.graph, self.queue, self.s_current, self.VIEWING_RANGE, self.k_m, self.occupancy, self.max_occupancy)
+                self.s_new, self.k_m = moveAndRescan(self.graph, self.queue, self.queue_set, self.s_current, self.VIEWING_RANGE, self.k_m, self.occupancy, self.max_occupancy)
             except Exception as e:
                 print(f"Error: Failed to move agent {self.id} from {self.s_current}: {e}")
                 return f'Movement Error: {e}'
@@ -220,14 +284,14 @@ class EvacuationAgent():
                 self.s_current = self.target
 
                 self.position_history.append(self.s_current)
-                result = self.set_next_target(self.s_current)
+                result = self.set_next_target(self.s_current, replan=True)
                 if result == 'Evacuated':
                     coord_target = stateNameToCoords(self.target)
                     self.occupancy[coord_target[1]][coord_target[0]] -= 1
                     return 'Evacuated'
                 try:
                     self.queue, self.k_m = self.graph.reset_for_new_planning()
-                    self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
+                    self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
                 except Exception as e:
                     print(f"Error: Failed to initialize new path for agent {self.id} to target {self.target}: {e}")
                     return f'Path Planning Error: {e}'
@@ -262,7 +326,7 @@ class EvacuationAgent():
 
         self.graph.updateGraphFromTerrain()
         self.graph.reset_for_new_planning()
-        self.graph, self.queue, self.k_m = initDStarLite(self.graph, self.queue, self.s_current, self.targets[self.targetidx], self.k_m)
+        self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.targets[self.targetidx], self.k_m)
         self.graph.setStart(self.s_current)
         self.graph.setGoal(self.targets[self.targetidx])
 
@@ -273,6 +337,7 @@ class EvacuationSimulation():
         self.evacuated_agents = []
         self.progress = {i: 0 for i in range(config.agent_num)}
         self.config = config  # Store config for fire update interval
+        self.path_count = dict()
 
         # Initialize fire model based on selected type
         if config.fire_model_type == "realistic":
@@ -295,9 +360,9 @@ class EvacuationSimulation():
             self.map_rows = config.map_rows
             self.map_cols = config.map_cols
             self.max_occupancy = config.max_occupancy
-            self.targets = config.targets
             self.agent_num = config.agent_num
             self.viewing_range = config.viewing_range
+            self.door_configs = config.door_configs if config.door_configs else []
             self.occupancy = [0] * self.map_rows
             for i in range(self.map_rows):
                 self.occupancy[i] = [0] * self.map_cols
@@ -306,6 +371,7 @@ class EvacuationSimulation():
                 raise ValueError("Occupancy grid dimensions do not match specified map dimensions")
 
             self.agents = []
+            self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs)
             for i in range(self.agent_num):
                 start_pos = config.start_positions[i]  # Example start positions; modify as needed
                 # Get fearness for this agent (default to 1.0 if not specified)
@@ -313,7 +379,7 @@ class EvacuationSimulation():
                 if config.agent_fearness and i < len(config.agent_fearness):
                     fearness = config.agent_fearness[i]
                 try:
-                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.targets, self.viewing_range, fire_fearness=fearness)
+                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph)
                     self.agents.append(agent)
                 except Exception as e:
                     print(f"Failed to initialize agent {i}: {e}")
@@ -340,6 +406,7 @@ class EvacuationSimulation():
                     print(f"Agent {agent.id} has evacuated successfully.")
                     # Remove the agent from the simulation
                     self.agents.remove(agent)
+                    self.path_count[tuple(agent.door_path)] = self.path_count.get(tuple(agent.door_path), 0) + 1
                 elif result == 'New Target Set':
                     print(f"Agent {agent.id} reached target and is setting new target {agent.target}.")
                     self.progress[agent.id] += 1
@@ -437,7 +504,7 @@ class EvacuationSimulation():
             self.anim.update(fire_data['oxygen_map'])
         
 
-    def run(self, max_steps=1000, show_visualization=True, use_pygame=True, use_matlab=False):
+    def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False) -> dict:
         self.steps = 0
         visualizer = None
         reached_targets = set()
@@ -481,13 +548,12 @@ class EvacuationSimulation():
             done, status = self.status()
             # MATLAB visualizer needs fire state, pygame doesn't
             if use_matlab and MATLAB_VISUALIZER_AVAILABLE:
-                import numpy as np
                 fire_state_array = np.array(self.shared_fire_map)
-                if not visualizer.update_display(self.steps, self.agents, self.targets, fire_state_array, status):
+                if not visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status):
                     visualizer.close()
                     return
             else:
-                if not visualizer.update_display(self.steps, self.agents, self.targets, status, reached_targets):
+                if not visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets):
                     visualizer.close()
                     return
 
@@ -502,11 +568,10 @@ class EvacuationSimulation():
                 elif visualizer:
                     # Show final state for a few seconds
                     if use_matlab and MATLAB_VISUALIZER_AVAILABLE:
-                        import numpy as np
                         fire_state_array = np.array(self.shared_fire_map)
-                        visualizer.update_display(self.steps, self.agents, self.targets, fire_state_array, status)
+                        visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status)
                     else:
-                        visualizer.update_display(self.steps, self.agents, self.targets, status, reached_targets)
+                        visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets)
                     import time
                     time.sleep(2)
                 break
@@ -517,13 +582,13 @@ class EvacuationSimulation():
             results = self.step()
 
             # Track reached targets for visualization
-            for agent_id, result in results:
-                if result == 'New Target Set':
-                    # Find the agent and add their previous target to reached targets
-                    for agent in self.agents:
-                        if agent.id == agent_id and agent.targetidx > 0:
-                            prev_target = self.targets[agent.targetidx - 1]
-                            reached_targets.add(prev_target)
+            # for agent_id, result in results:
+            #     if result == 'New Target Set':
+            #         # Find the agent and add their previous target to reached targets
+            #         for agent in self.agents:
+            #             if agent.id == agent_id and agent.targetidx > 0:
+            #                 prev_target = self.targets[agent.targetidx - 1]
+            #                 reached_targets.add(prev_target)
 
             # Update fire model at specified interval (decoupled from agent movement)
             if self.steps % self.config.fire_update_interval == 0:
@@ -534,14 +599,13 @@ class EvacuationSimulation():
             # Handle visualization updates
             if visualizer:
                 if use_matlab and MATLAB_VISUALIZER_AVAILABLE:
-                    import numpy as np
                     fire_state_array = np.array(self.shared_fire_map)
-                    if not visualizer.update_display(self.steps, self.agents, self.targets, fire_state_array, status):
+                    if not visualizer.update_display(self.steps, self.agents, self.door_configs, fire_state_array, status):
                         break  # User closed window
                 else:
-                    if not visualizer.update_display(self.steps, self.agents, self.targets, status, reached_targets):
+                    if not visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets):
                         break  # User closed window
-                visualizer.wait_for_next_frame(fps=5)  # 5 FPS for better visibility
+                visualizer.wait_for_next_frame(fps=10)  # 10 FPS for better visibility
             else:
                 # Show text visualization every few steps or when significant events occur
                 show_this_step = False
@@ -562,6 +626,8 @@ class EvacuationSimulation():
 
         if visualizer:
             visualizer.close()
+        
+        return self.path_count
 
 if __name__ == "__main__":
     # Example configuration
@@ -595,9 +661,13 @@ if __name__ == "__main__":
     config = SimulationConfig.from_json(json_config)
 
     simulation = EvacuationSimulation(config)
-    simulation.run(
+    path_count = simulation.run(
         max_steps=500, 
         show_visualization=False, 
         use_pygame=False, 
         use_matlab=True
-        )
+    )
+
+    # Print the path count for each agent
+    for agent_path, count in path_count.items():
+        print(f"Agent path: {agent_path}, Count: {count}")

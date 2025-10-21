@@ -6,3 +6,5 @@
 !/data/example_output.csv
 !/data/example_output.json
 CLAUDE.md
+*.json
+!example_configuration.json

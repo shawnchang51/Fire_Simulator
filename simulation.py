@@ -67,6 +67,7 @@ class SimulationConfig:
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
     door_configs: list[dict] = None  # Optional door configurations
     consider_env_factors: bool = False  # Whether agents consider temperature and smoke in pathfinding
+    wall_preference: float = 0.0  # Wall-following preference: 0=no preference, higher values=stronger wall-following
 
     @classmethod
     def from_json(cls, json_data):
@@ -84,7 +85,8 @@ class SimulationConfig:
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
             agent_fearness=json_data.get('agent_fearness', []),
             door_configs=json_data.get('door_configs', []),
-            consider_env_factors=json_data.get('consider_env_factors', False)
+            consider_env_factors=json_data.get('consider_env_factors', False),
+            wall_preference=json_data.get('wall_preferencewall_preference', 0.0)
         )
 
         # Auto-scale viewing_range based on cell_size if it seems too small
@@ -98,7 +100,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False, wall_distance_map=None, wall_preference=0.0):
         try:
             self.id = id
             self.start = start
@@ -114,6 +116,8 @@ class EvacuationAgent():
             self.total_steps = 0
             self.fire_model = fire_model
             self.consider_env_factors = consider_env_factors
+            self.wall_distance_map = wall_distance_map
+            self.wall_preference = wall_preference
 
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
@@ -172,23 +176,34 @@ class EvacuationAgent():
 
     def calculate_environmental_cost(self, row, col):
         """
-        Calculate combined environmental cost considering fire intensity, temperature, and smoke.
+        Calculate combined environmental cost considering fire intensity, temperature, smoke, and wall preference.
         Returns a cost value that will be used to update the graph cells.
         """
-        if not self.consider_env_factors or self.fire_model is None:
-            # If not considering environmental factors, return the current cell value unchanged
-            return self.graph.cells[row][col]
-
         # Get base fire intensity from current cell value
         base_fire = max(0, self.graph.cells[row][col]) if self.graph.cells[row][col] >= 0 else self.graph.cells[row][col]
+
+        # Start with base cost
+        combined_cost = base_fire
+
+        # Add wall preference cost (always applied if wall_preference > 0)
+        if self.wall_preference > 0 and self.wall_distance_map is not None and base_fire >= 0:
+            state = f"x{col}y{row}"
+            wall_dist = self.wall_distance_map.get(state, 0)
+            wall_penalty = max(0, wall_dist - 1) * self.wall_preference
+            combined_cost += wall_penalty
+
+        # Add environmental factors if enabled
+        if not self.consider_env_factors or self.fire_model is None:
+            # Return early if not considering environmental factors
+            return combined_cost if base_fire >= 0 else base_fire
 
         # Get temperature and smoke from fire model
         try:
             temperature = self.fire_model.temperature_map[row][col]
             smoke = self.fire_model.smoke_density[row][col]
         except (AttributeError, IndexError):
-            # If fire model doesn't have these attributes, just return base fire
-            return base_fire
+            # If fire model doesn't have these attributes, just return current cost
+            return combined_cost if base_fire >= 0 else base_fire
 
         # Temperature contribution: normalize temperature above ambient (20°C)
         # High temps (>100°C) should significantly increase cost
@@ -201,12 +216,12 @@ class EvacuationAgent():
         # High smoke reduces visibility and breathability
         smoke_cost = smoke * 2.0  # Amplify smoke impact
 
-        # Combine costs: base fire + temperature + smoke
+        # Add temperature and smoke to combined cost
         # If cell is an obstacle (negative value), preserve it
         if base_fire < 0:
             return base_fire  # Keep obstacles as-is
         else:
-            combined_cost = base_fire + temp_cost + smoke_cost
+            combined_cost += temp_cost + smoke_cost
             return combined_cost
 
     def update_lazy_graph(self, current_location=None):
@@ -371,12 +386,12 @@ class EvacuationAgent():
             except Exception as e:
                 print(f"Warning: Agent {self.id} failed to process graph update for {coord}: {e}")
 
-        # If considering environmental factors, update all cells with environmental costs
-        if self.consider_env_factors and self.fire_model is not None:
+        # If considering environmental factors OR wall preference, update all cells with costs
+        if (self.consider_env_factors and self.fire_model is not None) or self.wall_preference > 0:
             try:
                 for y in range(self.graph.y_dim):
                     for x in range(self.graph.x_dim):
-                        # Calculate and apply environmental cost for each cell
+                        # Calculate and apply environmental cost (includes wall preference)
                         env_cost = self.calculate_environmental_cost(y, x)
                         self.graph.cells[y][x] = env_cost
             except Exception as e:
@@ -389,6 +404,40 @@ class EvacuationAgent():
         self.graph.setGoal(self.targets[self.targetidx])
 
 class EvacuationSimulation():
+    def _create_wall_distance_map(self):
+        """
+        Create a map of distances to nearest wall/obstacle using BFS.
+        Returns a dictionary mapping state names to their distance from the nearest wall.
+        """
+        from collections import deque
+
+        dist_map = {}
+        queue = deque()
+
+        # Initialize with all walls/obstacles (value = -2)
+        for row in range(self.map_rows):
+            for col in range(self.map_cols):
+                state = f"x{col}y{row}"
+                if self.shared_fire_map[row][col] == -2:
+                    dist_map[state] = 0
+                    queue.append((state, 0))
+
+        # BFS to compute distances from walls
+        while queue:
+            state, dist = queue.popleft()
+            x, y = stateNameToCoords(state)
+
+            # Check 4-connected neighbors (only orthogonal, not diagonal)
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nx, ny = x + dx, y + dy
+                neighbor = f"x{nx}y{ny}"
+                if 0 <= nx < self.map_cols and 0 <= ny < self.map_rows:
+                    if neighbor not in dist_map:
+                        dist_map[neighbor] = dist + 1
+                        queue.append((neighbor, dist + 1))
+
+        return dist_map
+
     def __init__(self, config: SimulationConfig):
         # Set the obstacle value to match fire (-2)
         set_OBS_VAL(-2)
@@ -431,6 +480,10 @@ class EvacuationSimulation():
             if not self.occupancy or len(self.occupancy) != self.map_rows or any(len(row) != self.map_cols for row in self.occupancy):
                 raise ValueError("Occupancy grid dimensions do not match specified map dimensions")
 
+            # Create wall distance map for wall preference pathfinding
+            self.wall_distance_map = self._create_wall_distance_map()
+            print(f"Wall distance map created with {len(self.wall_distance_map)} cells.")
+
             self.agents: list[EvacuationAgent] = []
             self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs)
             for i in range(self.agent_num):
@@ -440,7 +493,16 @@ class EvacuationSimulation():
                 if config.agent_fearness and i < len(config.agent_fearness):
                     fearness = config.agent_fearness[i]
                 try:
-                    agent = EvacuationAgent(i, start_pos, self.occupancy, self.max_occupancy, self.map_rows, self.map_cols, self.viewing_range, fire_fearness=fearness, base_door_graph=self.base_door_graph, fire_model=self.model, consider_env_factors=config.consider_env_factors)
+                    agent = EvacuationAgent(
+                        i, start_pos, self.occupancy, self.max_occupancy,
+                        self.map_rows, self.map_cols, self.viewing_range,
+                        fire_fearness=fearness,
+                        base_door_graph=self.base_door_graph,
+                        fire_model=self.model,
+                        consider_env_factors=config.consider_env_factors,
+                        wall_distance_map=self.wall_distance_map,
+                        wall_preference=config.wall_preference
+                    )
                     self.agents.append(agent)
                 except Exception as e:
                     print(f"Failed to initialize agent {i}: {e}")

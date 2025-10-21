@@ -68,6 +68,10 @@ class SimulationConfig:
     door_configs: list[dict] = None  # Optional door configurations
     consider_env_factors: bool = False  # Whether agents consider temperature and smoke in pathfinding
     wall_preference: float = 0.0  # Wall-following preference: 0=no preference, higher values=stronger wall-following
+    # Knowledge sharing parameters
+    communication_range: float = 15.0  # Distance in cells within which agents can share door graph knowledge
+    sharing_interval: int = 5  # Share knowledge every N timesteps (default: 5 timesteps = 2.5 seconds)
+    sector_size: int = None  # Size of spatial index sectors (auto-calculated if None)
 
     @classmethod
     def from_json(cls, json_data):
@@ -86,7 +90,10 @@ class SimulationConfig:
             agent_fearness=json_data.get('agent_fearness', []),
             door_configs=json_data.get('door_configs', []),
             consider_env_factors=json_data.get('consider_env_factors', False),
-            wall_preference=json_data.get('wall_preferencewall_preference', 0.0)
+            wall_preference=json_data.get('wall_preference', 0.0),
+            communication_range=json_data.get('communication_range', 15.0),
+            sharing_interval=json_data.get('sharing_interval', 5),
+            sector_size=json_data.get('sector_size', None)
         )
 
         # Auto-scale viewing_range based on cell_size if it seems too small
@@ -232,6 +239,63 @@ class EvacuationAgent():
             print(f"Error: Agent {self.id} failed to update lazy graph at {self.s_current}: {e}")
             raise
     
+    def share_with_nearby(self, nearby_agents):
+        """
+        Share door graph knowledge with nearby agents.
+
+        Uses conservative merging strategy: takes maximum edge weight to represent
+        the most cautious estimate of path danger.
+
+        Args:
+            nearby_agents (list): List of EvacuationAgent objects within communication range
+        """
+        if self.door_graph is None:
+            return
+
+        for other_agent in nearby_agents:
+            # Skip self (all agents in list are active - simulation removes inactive ones)
+            if other_agent.id == self.id:
+                continue
+
+            # Skip agents without door graphs
+            if other_agent.door_graph is None:
+                continue
+
+            # Merge knowledge bidirectionally
+            print(f"merging graph of agent {self.id} and agent {other_agent.id}")
+            self._merge_door_graph_edges(other_agent.door_graph)
+            other_agent._merge_door_graph_edges(self.door_graph)
+
+    def _merge_door_graph_edges(self, other_door_graph):
+        """
+        Merge edge weights from another agent's door graph into this agent's graph.
+
+        Uses conservative strategy: takes maximum weight (most dangerous observed path)
+        to ensure agents avoid known hazards.
+
+        Args:
+            other_door_graph (DoorGraph): Another agent's door graph to merge from
+        """
+        if self.door_graph is None or other_door_graph is None:
+            return
+
+        # Merge edge weights
+        for node_id in self.door_graph.nodes:
+            if node_id not in other_door_graph.edges:
+                continue
+
+            for neighbor_id, other_weight in other_door_graph.edges[node_id].items():
+                if neighbor_id not in self.door_graph.edges[node_id]:
+                    # New edge discovered by other agent
+                    self.door_graph.edges[node_id][neighbor_id] = other_weight
+                else:
+                    # Take maximum weight (conservative approach)
+                    current_weight = self.door_graph.edges[node_id][neighbor_id]
+                    self.door_graph.edges[node_id][neighbor_id] = max(current_weight, other_weight)
+
+        # Invalidate cache after merging new knowledge
+        self.door_graph.clear_cache()
+
     def replan_door_path(self, current_location):
         try:
             path = replan_path(self.door_graph, current_location, self.graph.cells)
@@ -512,6 +576,23 @@ class EvacuationSimulation():
             print(f"Critical error initializing simulation: {e}")
             raise
 
+        # Initialize spatial index for knowledge sharing
+        from spatial_index import SpatialIndex
+
+        # Auto-calculate sector_size if not provided
+        sector_size = config.sector_size if config.sector_size is not None else int(config.communication_range)
+
+        self.spatial_index = SpatialIndex(
+            map_rows=config.map_rows,
+            map_cols=config.map_cols,
+            sector_size=sector_size
+        )
+
+        self.communication_range = config.communication_range
+        self.sharing_interval = config.sharing_interval
+
+        print(f"Spatial index initialized with sector_size={sector_size}, communication_range={config.communication_range} cells")
+
         # try:
         #     self.anim = RealtimeGridAnimator(initial_grid=[[0.0 for _ in range(self.map_cols)] for _ in range(self.map_rows)])
         # except Exception as e:
@@ -744,6 +825,22 @@ class EvacuationSimulation():
                 changes = self.update_fire()
                 if changes:
                     self.update_environment(changes)
+
+            # Share door graph knowledge between nearby agents at specified interval
+            if self.steps % self.sharing_interval == 0:
+                # Update spatial index with current agent positions - O(n)
+                self.spatial_index.update(self.agents)
+
+                # Each agent shares knowledge with nearby agents - O(n * k) where k << n
+                for agent in self.agents:
+                    # All agents in the list are active (evacuated/stuck agents are removed)
+                    if agent.door_graph is not None:
+                        nearby_agents = self.spatial_index.get_nearby_agents(
+                            agent.s_current,
+                            self.agents,
+                            self.communication_range
+                        )
+                        agent.share_with_nearby(nearby_agents)
 
             # Handle visualization updates
             if visualizer:

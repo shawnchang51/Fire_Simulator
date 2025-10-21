@@ -109,7 +109,7 @@ class EvacuationAgent():
             self.fire_damage = 0
             self.fire_fearness = fire_fearness
             self.door_graph = copy.deepcopy(base_door_graph)
-            self.door_path = None
+            self.door_path = []
 
             try:
                 self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
@@ -125,6 +125,7 @@ class EvacuationAgent():
             self.targetidx = 0
             self.targets = [self.door_graph.nodes[node].position for node in path]
             self.target = self.targets[self.targetidx]
+            # door_path will be populated as agent reaches each door/exit
 
             try:
                 start_coords = stateNameToCoords(start)
@@ -202,6 +203,9 @@ class EvacuationAgent():
 
     def set_next_target(self, current_location, replan=False):
         try:
+            # Record the door that was just reached (before incrementing targetidx)
+            self.door_path.append(current_location)
+
             self.targetidx += 1
             current_id = find_door_id_by_position(self.door_graph, current_location)
             current_type = self.door_graph.nodes[current_id].type if current_id in self.door_graph.nodes else None
@@ -333,6 +337,7 @@ class EvacuationSimulation():
         self.evacuated_agents = []
         self.progress = {i: 0 for i in range(config.agent_num)}
         self.config = config  # Store config for fire update interval
+        self.path_count = dict()
 
         # Initialize fire model based on selected type
         if config.fire_model_type == "realistic":
@@ -401,6 +406,7 @@ class EvacuationSimulation():
                     print(f"Agent {agent.id} has evacuated successfully.")
                     # Remove the agent from the simulation
                     self.agents.remove(agent)
+                    self.path_count[tuple(agent.door_path)] = self.path_count.get(tuple(agent.door_path), 0) + 1
                 elif result == 'New Target Set':
                     print(f"Agent {agent.id} reached target and is setting new target {agent.target}.")
                     self.progress[agent.id] += 1
@@ -498,7 +504,7 @@ class EvacuationSimulation():
             self.anim.update(fire_data['oxygen_map'])
         
 
-    def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False):
+    def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False) -> dict:
         self.steps = 0
         visualizer = None
         reached_targets = set()
@@ -620,6 +626,8 @@ class EvacuationSimulation():
 
         if visualizer:
             visualizer.close()
+        
+        return self.path_count
 
 if __name__ == "__main__":
     # Example configuration
@@ -653,9 +661,13 @@ if __name__ == "__main__":
     config = SimulationConfig.from_json(json_config)
 
     simulation = EvacuationSimulation(config)
-    simulation.run(
+    path_count = simulation.run(
         max_steps=500, 
         show_visualization=False, 
         use_pygame=False, 
         use_matlab=True
-        )
+    )
+
+    # Print the path count for each agent
+    for agent_path, count in path_count.items():
+        print(f"Agent path: {agent_path}, Count: {count}")

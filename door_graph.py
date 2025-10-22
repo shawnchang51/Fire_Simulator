@@ -375,11 +375,11 @@ def get_connected_nodes(grid, position: str, obstacle_value=-2, door_positions: 
 
     # Validate starting position
     if not (0 <= start_x < cols and 0 <= start_y < rows):
-        return []
+        return [], 0.0
 
     # If starting position is an obstacle, return empty list
     if grid[start_y][start_x] == obstacle_value:
-        return []
+        return [], 0.0
 
     # BFS to find all connected cells with distances
     # Queue stores (x, y, distance)

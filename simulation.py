@@ -107,7 +107,7 @@ class SimulationConfig:
         return config
 
 class EvacuationAgent():
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False, wall_distance_map=None, wall_preference=0.0):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False, wall_distance_map=None, wall_preference=0.0, initial_fire_map=None):
         try:
             self.id = id
             self.start = start
@@ -125,13 +125,14 @@ class EvacuationAgent():
             self.consider_env_factors = consider_env_factors
             self.wall_distance_map = wall_distance_map
             self.wall_preference = wall_preference
+            self.initial_fire_map = initial_fire_map
 
             try:
-                self.graph = GridWorld(map_rows, map_cols, fire_fearness=fire_fearness)
+                self.graph = GridWorld(map_cols, map_rows, fire_fearness=fire_fearness)
             except Exception as e:
-                raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_rows}x{map_cols}: {e}")
+                raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_cols}x{map_rows}: {e}")
 
-            path = replan_path(self.door_graph, start, self.graph.cells)
+            path = replan_path(self.door_graph, start, self.initial_fire_map if self.initial_fire_map is not None else self.graph.cells)
             print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
             print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
             if path is None:
@@ -178,7 +179,7 @@ class EvacuationAgent():
             raise
 
     def estimate_fire(self, current_location=None, fire_fearness=None):
-        _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph.cells, current_location if current_location is not None else self.s_current, estimate_fire=True)
+        _, fire_mean = self.door_graph.get_connected_nodes_cached(self.graph.cells, current_location if current_location is not None else self.s_current)
         return fire_mean*fire_fearness if fire_fearness is not None else fire_mean*self.fire_fearness
 
     def calculate_environmental_cost(self, row, col):
@@ -401,19 +402,36 @@ class EvacuationAgent():
             if len(self.position_history) > 5:
                 self.position_history.pop(0)
 
-            if self.s_new == 'goal' or self.s_new == self.target:
-                coord_current = stateNameToCoords(self.s_current)
-                self.occupancy[coord_current[1]][coord_current[0]] -= 1
-                coord_target = stateNameToCoords(self.target)
-                self.occupancy[coord_target[1]][coord_target[0]] += 1
+            # Check if agent reached target door (either on it or adjacent to it within 2 cells)
+            target_reached = False
+            coord_target = stateNameToCoords(self.target)
 
-                self.s_current = self.target
+            if self.s_new == 'goal' or self.s_new == self.target:
+                target_reached = True
+            else:
+                # Check if close to target (within 2 cells in 8-directions)
+                coord_new = stateNameToCoords(self.s_new) if self.s_new != 'stuck' else None
+                if coord_new:
+                    dx = abs(coord_new[0] - coord_target[0])
+                    dy = abs(coord_new[1] - coord_target[1])
+                    if dx <= 2 and dy <= 2:  # Within 2 cells
+                        target_reached = True
+
+            if target_reached:
+                # Move to new position if not stuck
+                if self.s_new != 'stuck' and self.s_new != self.s_current:
+                    coord_current = stateNameToCoords(self.s_current)
+                    self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                    coord_new = stateNameToCoords(self.s_new)
+                    self.occupancy[coord_new[1]][coord_new[0]] += 1
+                    self.s_current = self.s_new
 
                 self.position_history.append(self.s_current)
-                result = self.set_next_target(self.s_current, replan=True)
+                # Use the door position for replanning, not current position
+                result = self.set_next_target(self.target, replan=True)
                 if result == 'Evacuated':
-                    coord_target = stateNameToCoords(self.target)
-                    self.occupancy[coord_target[1]][coord_target[0]] -= 1
+                    coord_current = stateNameToCoords(self.s_current)
+                    self.occupancy[coord_current[1]][coord_current[0]] -= 1
                     return 'Evacuated'
                 try:
                     self.queue, self.k_m = self.graph.reset_for_new_planning()
@@ -565,7 +583,8 @@ class EvacuationSimulation():
                         fire_model=self.model,
                         consider_env_factors=config.consider_env_factors,
                         wall_distance_map=self.wall_distance_map,
-                        wall_preference=config.wall_preference
+                        wall_preference=config.wall_preference,
+                        initial_fire_map=self.shared_fire_map
                     )
                     self.agents.append(agent)
                 except Exception as e:

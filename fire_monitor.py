@@ -252,13 +252,14 @@ class FireMonitor:
         else:
             return "CRITICAL"
 
-    def save_monitoring_data(self, filename: str = "fire_monitoring_data.json"):
+    def save_monitoring_data(self, filename: str = "fire_monitoring_data.json", silent: bool = False):
         """Save all monitoring data to file"""
         with open(filename, 'w') as f:
             json.dump(self.history, f, indent=2)
-        print(f"Monitoring data saved to {filename}")
+        if not silent:
+            print(f"Monitoring data saved to {filename}")
 
-    def export_csv_data(self, filename: str = "fire_data.csv"):
+    def export_csv_data(self, filename: str = "fire_data.csv", silent: bool = False):
         """Export key metrics to CSV for analysis"""
         import csv
 
@@ -280,7 +281,8 @@ class FireMonitor:
                     stats['total_smoke_density']
                 ])
 
-        print(f"CSV data exported to {filename}")
+        if not silent:
+            print(f"CSV data exported to {filename}")
 
 
 def demo_monitoring():

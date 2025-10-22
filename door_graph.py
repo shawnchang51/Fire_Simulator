@@ -87,7 +87,7 @@ class DoorGraph:
         door_positions = [node.position for node in self.nodes.values()]
         result, fire_mean = get_connected_nodes(grid, position, obstacle_value=-2,
                                      door_positions=door_positions)
-        print(f"\033[32mCaching connected nodes for position {position}: {result} (type: {type(result)})\033[0m")
+        # print(f"\033[32mCaching connected nodes for position {position}: {result} (type: {type(result)})\033[0m")
         self._connected_cache[position] = result
         self._fire_mean_cache[position] = fire_mean
         return result, fire_mean
@@ -195,7 +195,7 @@ def compute_connectivity(grid, door_nodes: List[DoorNode]) -> List[Tuple[str, st
 
             # Try to reach door_j from door_i
             distance = bfs_with_blocked_cells(grid, pos_i, pos_j, blocked)
-            print(f"Computed connectivity between {door_i.id} and {door_j.id}: distance={distance}")
+            # print(f"Computed connectivity between {door_i.id} and {door_j.id}: distance={distance}")
 
             if distance is not None:
                 edges.append((door_i.id, door_j.id, float(distance)))
@@ -233,7 +233,7 @@ def build_door_graph(grid, door_configs: List[dict]) -> DoorGraph:
     for door_a, door_b, distance in edges:
         graph.add_edge(door_a, door_b, distance)
 
-    print(f"[DoorGraph] Built graph: {len(graph.nodes)} nodes, {len(edges)} edges")
+    # print(f"[DoorGraph] Built graph: {len(graph.nodes)} nodes, {len(edges)} edges")
 
     return graph
 
@@ -489,23 +489,23 @@ def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:
         # Start is not at a door - find connected doors via grid-level BFS
         connected_nodes, _ = graph.get_connected_nodes_cached(grid, start_pos)
 
-        if not connected_nodes:
-            print(f"\033[32mNo doors connected to start position {start_pos}\033[0m")
-            return None  # No doors reachable from start position
-        else:
-            print(f"\033[32mFound {len(connected_nodes)} doors connected to start position {start_pos}\033[0m")
+        # if not connected_nodes:
+        #     print(f"\033[32mNo doors connected to start position {start_pos}\033[0m")
+        #     return None  # No doors reachable from start position
+        # else:
+        #     print(f"\033[32mFound {len(connected_nodes)} doors connected to start position {start_pos}\033[0m")
 
         # Initialize priority queue with all connected doors
         pq = []
-        print(f"\033[32mConnected nodes:{connected_nodes}\033[0m")
+        # print(f"\033[32mConnected nodes:{connected_nodes}\033[0m")
         for door_pos, dist_to_door in connected_nodes:
             door_id = find_door_id_by_position(graph, door_pos)
-            print(f"\033[32mConnected door at {door_pos} with ID {door_id} at distance {dist_to_door}\033[0m")
+            # print(f"\033[32mConnected door at {door_pos} with ID {door_id} at distance {dist_to_door}\033[0m")
             if door_id:
                 heapq.heappush(pq, (dist_to_door, door_id, [door_id]))
 
         if not pq:
-            print(f"\033[32mNo valid doors found in connected nodes for start position {start_pos}\033[0m")
+            # print(f"\033[32mNo valid doors found in connected nodes for start position {start_pos}\033[0m")
             return None  # No valid doors found in connected nodes
 
     # STEP 1+: Standard Dijkstra on door graph
@@ -540,5 +540,5 @@ def replan_path(graph: DoorGraph, start_pos: str, grid) -> Optional[List[str]]:
 
             heapq.heappush(pq, (new_dist, neighbor_door, new_path))
 
-    print(f"\033[32mNo exit reachable from start position {start_pos}\033[0m")
+    # print(f"\033[32mNo exit reachable from start position {start_pos}\033[0m")
     return None  # No exit reachable

@@ -133,8 +133,8 @@ class EvacuationAgent():
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_cols}x{map_rows}: {e}")
 
             path = replan_path(self.door_graph, start, self.initial_fire_map if self.initial_fire_map is not None else self.graph.cells)
-            print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
-            print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
+            # print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
+            # print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
             if path is None:
                 raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
 
@@ -263,7 +263,7 @@ class EvacuationAgent():
                 continue
 
             # Merge knowledge bidirectionally
-            print(f"merging graph of agent {self.id} and agent {other_agent.id}")
+            # print(f"merging graph of agent {self.id} and agent {other_agent.id}")
             self._merge_door_graph_edges(other_agent.door_graph)
             other_agent._merge_door_graph_edges(self.door_graph)
 
@@ -520,12 +520,13 @@ class EvacuationSimulation():
 
         return dist_map
 
-    def __init__(self, config: SimulationConfig):
+    def __init__(self, config: SimulationConfig, silent: bool = False):
         # Set the obstacle value to match fire (-2)
         set_OBS_VAL(-2)
         self.evacuated_agents = []
         self.progress = {i: 0 for i in range(config.agent_num)}
         self.config = config  # Store config for fire update interval
+        self.silent = silent  # Control print output
 
         self.path_count = dict()
         self.average_fire_damage = 0.0
@@ -535,15 +536,18 @@ class EvacuationSimulation():
         if config.fire_model_type == "realistic":
             from fire_model_realistic import create_fire_model
             self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols)
-            print(f"Using REALISTIC fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
+            if not silent:
+                print(f"Using REALISTIC fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
         elif config.fire_model_type == "aggressive":
             from fire_model_aggressive import create_fire_model
             self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols)
-            print(f"Using AGGRESSIVE fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
+            if not silent:
+                print(f"Using AGGRESSIVE fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
         else:
             # Default fire model
             self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols, wind_speed=1.0)
-            print(f"Using DEFAULT fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
+            if not silent:
+                print(f"Using DEFAULT fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
 
         self.monitor = FireMonitor(self.model)
 
@@ -564,7 +568,8 @@ class EvacuationSimulation():
 
             # Create wall distance map for wall preference pathfinding
             self.wall_distance_map = self._create_wall_distance_map()
-            print(f"Wall distance map created with {len(self.wall_distance_map)} cells.")
+            if not silent:
+                print(f"Wall distance map created with {len(self.wall_distance_map)} cells.")
 
             self.agents: list[EvacuationAgent] = []
             self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs)
@@ -610,7 +615,8 @@ class EvacuationSimulation():
         self.communication_range = config.communication_range
         self.sharing_interval = config.sharing_interval
 
-        print(f"Spatial index initialized with sector_size={sector_size}, communication_range={config.communication_range} cells")
+        if not silent:
+            print(f"Spatial index initialized with sector_size={sector_size}, communication_range={config.communication_range} cells")
 
         # try:
         #     self.anim = RealtimeGridAnimator(initial_grid=[[0.0 for _ in range(self.map_cols)] for _ in range(self.map_rows)])
@@ -625,10 +631,11 @@ class EvacuationSimulation():
         MAX_AVERAGE_TEMP = 100.0   # Example threshold in Celsius
 
         survived = agent.fire_damage < MAX_FIRE_DAMAGE and agent.peak_temp < MAX_PEAK_TEMP and agent.average_temp < MAX_AVERAGE_TEMP
-        if survived:
-            print(f"Agent {agent.id} survived evacuation with fire damage {agent.fire_damage:.2f}, peak temp {agent.peak_temp:.2f}C, and average temp {agent.average_temp:.2f}C.")
-        else:
-            print(f"Agent {agent.id} did NOT survive evacuation! Fire damage: {agent.fire_damage:.2f}, Peak temp: {agent.peak_temp:.2f}C, Average temp: {agent.average_temp:.2f}C.")
+        if not self.silent:
+            if survived:
+                print(f"Agent {agent.id} survived evacuation with fire damage {agent.fire_damage:.2f}, peak temp {agent.peak_temp:.2f}C, and average temp {agent.average_temp:.2f}C.")
+            else:
+                print(f"Agent {agent.id} did NOT survive evacuation! Fire damage: {agent.fire_damage:.2f}, Peak temp: {agent.peak_temp:.2f}C, Average temp: {agent.average_temp:.2f}C.")
         return survived
 
     def step(self):
@@ -639,7 +646,8 @@ class EvacuationSimulation():
                 results.append((agent.id, result))
                 if result == 'Evacuated':
                     self.evacuated_agents.append(agent.id)
-                    print(f"Agent {agent.id} has evacuated successfully.")
+                    if not self.silent:
+                        print(f"Agent {agent.id} has evacuated successfully.")
                     survived = self.check_agent_survival(agent)
                     if survived:
                         self.survived_agents += 1
@@ -655,15 +663,18 @@ class EvacuationSimulation():
                         self.average_avg_temp = self.average_avg_temp*(len(self.evacuated_agents)-1)/len(self.evacuated_agents) + agent.average_temp/len(self.evacuated_agents)
                     # Remove the agent from the simulation
                     self.agents.remove(agent)
-                     
+
                 elif result == 'New Target Set':
-                    print(f"Agent {agent.id} reached target and is setting new target {agent.target}.")
+                    if not self.silent:
+                        print(f"Agent {agent.id} reached target and is setting new target {agent.target}.")
                     self.progress[agent.id] += 1
                 elif result == 'stuck':
-                    print(f"Agent {agent.id} is stuck at {agent.s_current}.")
+                    if not self.silent:
+                        print(f"Agent {agent.id} is stuck at {agent.s_current}.")
                     self.agents.remove(agent)
                 elif result is not None:
-                    print(f"Agent {agent.id} encountered an issue: {result}")
+                    if not self.silent:
+                        print(f"Agent {agent.id} encountered an issue: {result}")
 
             except Exception as e:
                 print(f"Critical error moving agent {agent.id}: {e}")
@@ -823,7 +834,8 @@ class EvacuationSimulation():
             done, status = self.status()
 
             if done:
-                print("All agents have evacuated or are stuck. Simulation complete.")
+                if not self.silent:
+                    print("All agents have evacuated or are stuck. Simulation complete.")
                 if show_visualization and not visualizer:
                     self.visualize()
                 elif visualizer:
@@ -836,7 +848,8 @@ class EvacuationSimulation():
                     time.sleep(2)
                 break
             elif self.steps >= max_steps:
-                print("Maximum steps reached. Ending simulation.")
+                if not self.silent:
+                    print("Maximum steps reached. Ending simulation.")
                 break
 
             results = self.step()
@@ -894,8 +907,9 @@ class EvacuationSimulation():
                     print(f"\n=== STEP {self.steps} ===")
                     self.visualize()
 
-                # For demonstration, we will just print the status
-                print(f"Status: {status}")
+                # Print status if not in silent mode
+                if not self.silent:
+                    print(f"Status: {status}")
 
         # Create data directory if it doesn't exist (safe for parallel execution)
         data_dir = "./data"
@@ -903,8 +917,8 @@ class EvacuationSimulation():
 
         # Generate unique filename with microseconds to avoid conflicts in parallel execution
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        self.monitor.save_monitoring_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.json")
-        self.monitor.export_csv_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.csv")
+        self.monitor.save_monitoring_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.json", silent=self.silent)
+        self.monitor.export_csv_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.csv", silent=self.silent)
 
         if visualizer:
             visualizer.close()

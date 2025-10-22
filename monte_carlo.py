@@ -40,6 +40,13 @@ from multiprocessing import Pool, cpu_count
 import copy
 from functools import partial
 
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    print("Note: Install tqdm for progress bars: pip install tqdm")
+
 def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationConfig:
     """
     Replace fire positions with random valid locations.
@@ -173,12 +180,14 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_s
     average_avg_temp = 0
     evacuated_agents = 0
     survived_agents = 0
-    for i in range(num_runs):
-        print(f"Starting simulation run {i + 1}/{num_runs}")
-        
-        sim = EvacuationSimulation(config)
-        result = sim.run(500)
-        # path_count, steps, average_fire_damage, average_peak_temp, average_avg_temp, evacuated_agents, survived_agents
+
+    # Use tqdm progress bar if available
+    iterator = tqdm(range(num_runs), desc="Running simulations", unit="run") if TQDM_AVAILABLE else range(num_runs)
+
+    for i in iterator:
+        sim = EvacuationSimulation(config, silent=True)
+        result = sim.run(500, show_visualization=False, use_pygame=False, use_matlab=False)
+
         results.append(result)
         path_count = dict(Counter(path_count) + Counter(result['path_count']))
         average_steps = (average_steps * i + result['steps']) / (i + 1)
@@ -187,8 +196,20 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_s
         average_avg_temp = (average_avg_temp * i + result['average_avg_temp']) / (i + 1)
         evacuated_agents += result['evacuated_agents']
         survived_agents += result['survived_agents']
-        print(f"Completed simulation run {i + 1}/{num_runs}\n")
-    
+
+        # Update progress bar with stats
+        if TQDM_AVAILABLE:
+            success_rate = (evacuated_agents / ((i + 1) * config.agent_num)) * 100
+            iterator.set_postfix({
+                'Success Rate': f'{success_rate:.1f}%',
+                'Evacuated': evacuated_agents,
+                'Avg Steps': f'{average_steps:.1f}'
+            })
+        else:
+            # Simple print for fallback
+            success_rate = (evacuated_agents / ((i + 1) * config.agent_num)) * 100
+            print(f"Run {i+1}/{num_runs} | Success: {success_rate:.1f}% | Evacuated: {evacuated_agents}")
+
     statistics['path_count'] = path_count
     statistics['average_steps'] = average_steps
     statistics['average_fire_damage'] = average_fire_damage
@@ -218,9 +239,7 @@ def _run_single_simulation(args):
     # Create a deep copy to avoid shared state between processes
     config_copy = copy.deepcopy(config)
 
-    print(f"[Process {mp.current_process().name}] Starting simulation run {run_number + 1}/{total_runs}")
-
-    sim = EvacuationSimulation(config_copy)
+    sim = EvacuationSimulation(config_copy, silent=True)
 
     # Run without visualization for speed
     result = sim.run(
@@ -229,8 +248,6 @@ def _run_single_simulation(args):
         use_pygame=False,
         use_matlab=False
     )
-
-    print(f"[Process {mp.current_process().name}] Completed simulation run {run_number + 1}/{total_runs}")
 
     return result
 
@@ -263,15 +280,25 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
     # Prepare arguments for each simulation run
     sim_args = [(config, i, num_runs, random_seed) for i in range(num_runs)]
 
-    # Run simulations in parallel
+    # Run simulations in parallel with progress bar
     with Pool(processes=num_processes) as pool:
-        results = pool.map(_run_single_simulation, sim_args)
+        if TQDM_AVAILABLE:
+            results = list(tqdm(
+                pool.imap(_run_single_simulation, sim_args),
+                total=num_runs,
+                desc="Running parallel simulations",
+                unit="run"
+            ))
+        else:
+            results = pool.map(_run_single_simulation, sim_args)
+            print(f"Completed all {num_runs} simulations")
 
     print(f"\n{'='*60}")
     print(f"All {num_runs} simulations completed!")
     print(f"{'='*60}\n")
 
     # Aggregate statistics from all runs
+    print("Aggregating results...")
     statistics = {}
     path_count = {}
     average_steps = 0
@@ -290,6 +317,10 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
         evacuated_agents += result['evacuated_agents']
         survived_agents += result['survived_agents']
 
+    # Calculate success rate
+    total_agents = num_runs * config.agent_num
+    success_rate = (evacuated_agents / total_agents) * 100 if total_agents > 0 else 0
+
     statistics['path_count'] = path_count
     statistics['average_steps'] = average_steps
     statistics['average_fire_damage'] = average_fire_damage
@@ -297,6 +328,9 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
     statistics['average_avg_temp'] = average_avg_temp
     statistics['evacuated_agents'] = evacuated_agents
     statistics['survived_agents'] = survived_agents
+    statistics['success_rate'] = success_rate
+
+    print(f"Overall Success Rate: {success_rate:.1f}% ({evacuated_agents}/{total_agents} agents evacuated)")
 
     return results, statistics
 

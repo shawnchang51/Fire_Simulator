@@ -735,6 +735,17 @@ class EvacuationSimulation():
         
 
     def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False) -> dict:
+        '''
+        Run the evacuation simulation until all agents have evacuated or max_steps is reached.
+        Args:
+            max_steps (int): Maximum number of simulation steps to run.
+            show_visualization (bool): Whether to show text-based visualization in the console.
+            use_pygame (bool): Whether to use pygame for visualization if available.
+            use_matlab (bool): Whether to use MATLAB-style visualization if available.
+        Returns:
+            dict: Summary of simulation results including path_count, steps, average_fire_damage,
+                  average_peak_temp, average_avg_temp, evacuated_agents, survived_agents.
+        '''
         self.simulation_results= dict()       
         self.steps = 0
         visualizer = None

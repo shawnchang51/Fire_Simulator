@@ -221,7 +221,14 @@ def _run_single_simulation(args):
     print(f"[Process {mp.current_process().name}] Starting simulation run {run_number + 1}/{total_runs}")
 
     sim = EvacuationSimulation(config_copy)
-    result = sim.run(500)
+
+    # Run without visualization for speed
+    result = sim.run(
+        max_steps=500,
+        show_visualization=False,
+        use_pygame=False,
+        use_matlab=False
+    )
 
     print(f"[Process {mp.current_process().name}] Completed simulation run {run_number + 1}/{total_runs}")
 

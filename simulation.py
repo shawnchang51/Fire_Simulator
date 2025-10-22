@@ -878,8 +878,14 @@ class EvacuationSimulation():
                 # For demonstration, we will just print the status
                 print(f"Status: {status}")
 
-        self.monitor.save_monitoring_data(f"./data/evacuation_simulation_data_{datetime.now().strftime('%Y%m%d_%H%M')}.json")
-        self.monitor.export_csv_data(f"./data/evacuation_simulation_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
+        # Create data directory if it doesn't exist (safe for parallel execution)
+        data_dir = "./data"
+        os.makedirs(data_dir, exist_ok=True)
+
+        # Generate unique filename with microseconds to avoid conflicts in parallel execution
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        self.monitor.save_monitoring_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.json")
+        self.monitor.export_csv_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.csv")
 
         if visualizer:
             visualizer.close()

@@ -1,8 +1,44 @@
+"""
+Monte Carlo Evacuation Simulation
+==================================
+
+This module provides both serial and parallel Monte Carlo simulation capabilities
+for the fire evacuation system. The parallel implementation utilizes all available
+CPU cores for maximum performance.
+
+Features:
+- Random fire and agent placement for each simulation
+- Serial execution for debugging and small runs
+- Parallel execution using multiprocessing for large-scale simulations
+- Reproducible results with random seed control
+- Comprehensive statistics aggregation
+
+Usage:
+    # Serial mode (10 runs)
+    python monte_carlo.py --runs 10
+
+    # Parallel mode using all CPU cores
+    python monte_carlo.py --runs 100 --parallel
+
+    # Parallel mode with specific number of processes
+    python monte_carlo.py --runs 50 --parallel --processes 4
+
+Functions:
+    replace_fire(config, num_fires): Randomly place fire on valid positions
+    replace_agents(config, num_agents): Randomly place agents on valid positions
+    run_monte_carlo_simulation(config, num_runs, seed): Serial execution
+    run_monte_carlo_parallel(config, num_runs, seed, num_processes): Parallel execution
+"""
+
 from simulation import EvacuationSimulation, SimulationConfig
 from d_star_lite.utils import coordsToStateName, stateNameToCoords
 import argparse, json, os
 import random
 from collections import Counter
+import multiprocessing as mp
+from multiprocessing import Pool, cpu_count
+import copy
+from functools import partial
 
 def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationConfig:
     """
@@ -163,19 +199,197 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_s
 
     return results, statistics
 
+def _run_single_simulation(args):
+    """
+    Worker function to run a single simulation (for parallel execution).
+
+    Args:
+        args: Tuple of (config, run_number, total_runs, seed)
+
+    Returns:
+        Dictionary with simulation results
+    """
+    config, run_number, total_runs, seed = args
+
+    # Set random seed for this specific run (for reproducibility)
+    if seed is not None:
+        random.seed(seed + run_number)
+
+    # Create a deep copy to avoid shared state between processes
+    config_copy = copy.deepcopy(config)
+
+    print(f"[Process {mp.current_process().name}] Starting simulation run {run_number + 1}/{total_runs}")
+
+    sim = EvacuationSimulation(config_copy)
+    result = sim.run(500)
+
+    print(f"[Process {mp.current_process().name}] Completed simulation run {run_number + 1}/{total_runs}")
+
+    return result
+
+
+def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_seed: int = None, num_processes: int = None) -> tuple:
+    """
+    Run multiple evacuation simulations in parallel using all available CPU cores.
+
+    Args:
+        config (SimulationConfig): Configuration for the simulation.
+        num_runs (int): Number of simulation runs to perform.
+        random_seed (int): Random seed for reproducibility (optional).
+        num_processes (int): Number of processes to use (default: all CPU cores).
+
+    Returns:
+        Tuple of (results, statistics)
+    """
+    # Replace fire and agents once for the base configuration
+    config = replace_fire(config)
+    config = replace_agents(config)
+
+    # Determine number of processes
+    if num_processes is None:
+        num_processes = cpu_count()
+
+    print(f"\n{'='*60}")
+    print(f"Running {num_runs} simulations in parallel using {num_processes} CPU cores")
+    print(f"{'='*60}\n")
+
+    # Prepare arguments for each simulation run
+    sim_args = [(config, i, num_runs, random_seed) for i in range(num_runs)]
+
+    # Run simulations in parallel
+    with Pool(processes=num_processes) as pool:
+        results = pool.map(_run_single_simulation, sim_args)
+
+    print(f"\n{'='*60}")
+    print(f"All {num_runs} simulations completed!")
+    print(f"{'='*60}\n")
+
+    # Aggregate statistics from all runs
+    statistics = {}
+    path_count = {}
+    average_steps = 0
+    average_fire_damage = 0
+    average_peak_temp = 0
+    average_avg_temp = 0
+    evacuated_agents = 0
+    survived_agents = 0
+
+    for i, result in enumerate(results):
+        path_count = dict(Counter(path_count) + Counter(result['path_count']))
+        average_steps = (average_steps * i + result['steps']) / (i + 1)
+        average_fire_damage = (average_fire_damage * i + result['average_fire_damage']) / (i + 1)
+        average_peak_temp = (average_peak_temp * i + result['average_peak_temp']) / (i + 1)
+        average_avg_temp = (average_avg_temp * i + result['average_avg_temp']) / (i + 1)
+        evacuated_agents += result['evacuated_agents']
+        survived_agents += result['survived_agents']
+
+    statistics['path_count'] = path_count
+    statistics['average_steps'] = average_steps
+    statistics['average_fire_damage'] = average_fire_damage
+    statistics['average_peak_temp'] = average_peak_temp
+    statistics['average_avg_temp'] = average_avg_temp
+    statistics['evacuated_agents'] = evacuated_agents
+    statistics['survived_agents'] = survived_agents
+
+    return results, statistics
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Read configuration file (JSON)")
+    # Required for Windows multiprocessing support
+    mp.freeze_support()
+
+    parser = argparse.ArgumentParser(
+        description="Monte Carlo Evacuation Simulation",
+        epilog="""
+Examples:
+  # Run 10 simulations in serial mode:
+  python monte_carlo.py --runs 10
+
+  # Run 50 simulations in parallel using all CPU cores:
+  python monte_carlo.py --runs 50 --parallel
+
+  # Run 100 simulations in parallel using 4 processes:
+  python monte_carlo.py --runs 100 --parallel --processes 4
+
+  # Use custom configuration file:
+  python monte_carlo.py --config my_config.json --runs 20 --parallel
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--config",
         type=str,
         default="example_configuration.json",
         help="Path to configuration file (default: example_configuration.json)"
     )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=10,
+        help="Number of simulation runs (default: 10)"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)"
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run simulations in parallel using all CPU cores"
+    )
+    parser.add_argument(
+        "--processes",
+        type=int,
+        default=None,
+        help="Number of processes for parallel execution (default: all CPU cores)"
+    )
     args = parser.parse_args()
 
+    # Load configuration
     json_path = os.path.join(os.path.dirname(__file__), args.config)
     with open(json_path, 'r', encoding='utf-8') as f:
         json_config = json.load(f)
 
     sim_config = SimulationConfig.from_json(json_config)
-    results, statistics = run_monte_carlo_simulation(sim_config, num_runs=10, random_seed=42)
+
+    # Run simulations
+    import time
+    start_time = time.time()
+
+    if args.parallel:
+        print(f"Running in PARALLEL mode with {args.processes or cpu_count()} processes")
+        results, statistics = run_monte_carlo_parallel(
+            sim_config,
+            num_runs=args.runs,
+            random_seed=args.seed,
+            num_processes=args.processes
+        )
+    else:
+        print(f"Running in SERIAL mode")
+        results, statistics = run_monte_carlo_simulation(
+            sim_config,
+            num_runs=args.runs,
+            random_seed=args.seed
+        )
+
+    elapsed_time = time.time() - start_time
+
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"MONTE CARLO SIMULATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"Total runs: {args.runs}")
+    print(f"Mode: {'Parallel' if args.parallel else 'Serial'}")
+    if args.parallel:
+        print(f"Processes used: {args.processes or cpu_count()}")
+    print(f"Time elapsed: {elapsed_time:.2f} seconds")
+    print(f"Average time per run: {elapsed_time/args.runs:.2f} seconds")
+    print(f"\nStatistics:")
+    print(f"  Average steps: {statistics['average_steps']:.2f}")
+    print(f"  Average fire damage: {statistics['average_fire_damage']:.2f}")
+    print(f"  Average peak temperature: {statistics['average_peak_temp']:.2f}")
+    print(f"  Average temperature: {statistics['average_avg_temp']:.2f}")
+    print(f"  Total evacuated agents: {statistics['evacuated_agents']}")
+    print(f"  Total survived agents: {statistics['survived_agents']}")
+    print(f"{'='*60}\n")

@@ -244,7 +244,7 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
     return config
 
 
-def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_seed: int = None) -> list:
+def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int) -> list:
     """
     Run multiple evacuation simulations and collect statistics.
 
@@ -252,8 +252,6 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_s
         config (SimulationConfig): Configuration for the simulation.
         num_runs (int): Number of simulation runs to perform.
     """
-
-    random.seed(random_seed)
     results = []
     statistics = {}
     path_count = {}
@@ -314,18 +312,14 @@ def _run_single_simulation(args):
     Worker function to run a single simulation (for parallel execution).
 
     Args:
-        args: Tuple of (config, run_number, total_runs, seed)
+        args: Tuple of (config, run_number, total_runs)
 
     Returns:
         Dictionary with simulation results (or error result if failed)
     """
-    config, run_number, total_runs, seed = args
+    config, run_number, total_runs = args
 
     try:
-        # Set random seed for this specific run (for reproducibility)
-        if seed is not None:
-            random.seed(seed + run_number)
-
         # Create a deep copy to avoid shared state between processes
         config_copy = copy.deepcopy(config)
 
@@ -367,14 +361,13 @@ def _run_single_simulation(args):
         }
 
 
-def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_seed: int = None, num_processes: int = None) -> tuple:
+def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_processes: int = None) -> tuple:
     """
     Run multiple evacuation simulations in parallel using all available CPU cores.
 
     Args:
         config (SimulationConfig): Configuration for the simulation.
         num_runs (int): Number of simulation runs to perform.
-        random_seed (int): Random seed for reproducibility (optional).
         num_processes (int): Number of processes to use (default: all CPU cores).
 
     Returns:
@@ -389,7 +382,7 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
     print(f"{'='*60}\n")
 
     # Prepare arguments for each simulation run
-    sim_args = [(config, i, num_runs, random_seed) for i in range(num_runs)]
+    sim_args = [(config, i, num_runs) for i in range(num_runs)]
 
     # Run simulations in parallel with progress bar
     with Pool(processes=num_processes) as pool:
@@ -635,12 +628,6 @@ Output:
         help="Number of simulation runs (default: 10)"
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility (default: 42)"
-    )
-    parser.add_argument(
         "--parallel",
         action="store_true",
         help="Run simulations in parallel using all CPU cores"
@@ -674,15 +661,13 @@ Output:
         results, statistics = run_monte_carlo_parallel(
             sim_config,
             num_runs=args.runs,
-            random_seed=args.seed,
             num_processes=args.processes
         )
     else:
         print(f"Running in SERIAL mode")
         results, statistics = run_monte_carlo_simulation(
             sim_config,
-            num_runs=args.runs,
-            random_seed=args.seed
+            num_runs=args.runs
         )
 
     elapsed_time = time.time() - start_time

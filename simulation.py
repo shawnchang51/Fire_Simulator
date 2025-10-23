@@ -155,8 +155,8 @@ class EvacuationAgent():
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_cols}x{map_rows}: {e}")
 
             path = replan_path(self.door_graph, start, self.initial_fire_map if self.initial_fire_map is not None else self.graph.cells)
-            # print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
-            # print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
+            print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
+            print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
             if path is None:
                 raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
 
@@ -285,7 +285,7 @@ class EvacuationAgent():
                 continue
 
             # Merge knowledge bidirectionally
-            # print(f"merging graph of agent {self.id} and agent {other_agent.id}")
+            print(f"merging graph of agent {self.id} and agent {other_agent.id}")
             self._merge_door_graph_edges(other_agent.door_graph)
             other_agent._merge_door_graph_edges(self.door_graph)
 
@@ -440,7 +440,7 @@ class EvacuationAgent():
                     
         try:
             if self.s_current in self.position_history[-3:]:  # Check last 3 positions
-                # print(f"Cycle detected at {self.s_current}! Forcing rescan...")
+                print(f"Cycle detected at {self.s_current}! Forcing rescan...")
                 # Force a more aggressive rescan to break the cycle
                 try:
                     scanForObstacles(self.graph, self.queue, self.queue_set, self.s_current, self.VIEWING_RANGE * 2, self.k_m)
@@ -562,11 +562,15 @@ class EvacuationAgent():
             return f'Critical Movement Error: {e}'
         
     def update_graph(self, changes):
+        # Track all affected cells for vertex updates
+        affected_cells = set()
+
         for(coord, value) in changes.items():
             try:
                 x, y = stateNameToCoords(coord)
                 if 0 <= x < self.graph.x_dim and 0 <= y < self.graph.y_dim:
                     self.graph.cells[y][x] = value
+                    affected_cells.add((x, y))
                 else:
                     print(f"Warning: Agent {self.id} received out-of-bounds update for {coord} ({x},{y})")
             except Exception as e:
@@ -580,14 +584,31 @@ class EvacuationAgent():
                         # Calculate and apply environmental cost (includes wall preference)
                         env_cost = self.calculate_environmental_cost(y, x)
                         self.graph.cells[y][x] = env_cost
+                        # When recalculating all costs, mark all cells as affected
+                        affected_cells.add((x, y))
             except Exception as e:
                 print(f"Warning: Agent {self.id} failed to apply environmental costs: {e}")
 
+        # Update graph edge costs based on new terrain
+        # This preserves D* Lite state (g and rhs values) for incremental replanning
         self.graph.updateGraphFromTerrain()
-        self.graph.reset_for_new_planning()
-        self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.targets[self.targetidx], self.k_m)
-        self.graph.setStart(self.s_current)
-        self.graph.setGoal(self.targets[self.targetidx])
+
+        # D* Lite incremental update: mark affected vertices for replanning
+        # This is MUCH faster than reinitializing the entire algorithm
+        from d_star_lite.d_star_lite import updateVertex, computeShortestPath
+        for (x, y) in affected_cells:
+            state_id = f"x{x}y{y}"
+            if state_id in self.graph.graph:
+                updateVertex(self.graph, self.queue, self.queue_set, state_id, self.s_current, self.k_m)
+                # Also update neighbors since edge costs changed
+                for neighbor_id in self.graph.graph[state_id].children:
+                    updateVertex(self.graph, self.queue, self.queue_set, neighbor_id, self.s_current, self.k_m)
+
+        # After marking all affected vertices, recompute the shortest path
+        # This is still much faster than full reinitialization because D* Lite
+        # only replans the affected portions of the path
+        if affected_cells:
+            computeShortestPath(self.graph, self.queue, self.queue_set, self.s_current, self.k_m)
 
 class EvacuationSimulation():
     def _create_wall_distance_map(self):
@@ -634,6 +655,8 @@ class EvacuationSimulation():
 
         self.path_count = dict()
         self.average_fire_damage = 0.0
+        self.average_peak_temp = 0.0
+        self.average_avg_temp = 0.0
         self.survived_agents = 0
 
         # Initialize fire model based on selected type

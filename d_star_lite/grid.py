@@ -106,8 +106,57 @@ class GridWorld(Graph):
                 self.graph['x' + str(j) + 'y' + str(i)] = node
 
     def updateGraphFromTerrain(self):
-        """Update graph edge costs after terrain changes"""
-        self.generateGraphFromGrid()
+        """Update graph edge costs after terrain changes
+
+        This updates edge costs based on current terrain WITHOUT destroying
+        the D* Lite state (g and rhs values). This is critical for incremental
+        replanning to work efficiently.
+        """
+        import math
+
+        # Update edge costs for all existing nodes without destroying g/rhs values
+        for i in range(len(self.cells)):
+            for j in range(len(self.cells[i])):
+                node_id = 'x' + str(j) + 'y' + str(i)
+                if node_id not in self.graph:
+                    continue  # Skip if node doesn't exist
+
+                node = self.graph[node_id]
+                current_cost = self.getTerrainCost(self.cells[i][j])
+
+                # Recalculate edge costs to all neighbors
+                # 4-connected neighbors (horizontal/vertical)
+                directions = []
+                if i > 0:  # top
+                    directions.append((i-1, j, 1.0))
+                if i + 1 < self.y_dim:  # bottom
+                    directions.append((i+1, j, 1.0))
+                if j > 0:  # left
+                    directions.append((i, j-1, 1.0))
+                if j + 1 < self.x_dim:  # right
+                    directions.append((i, j+1, 1.0))
+
+                # 8-connected neighbors (add diagonals)
+                if self.connect8:
+                    diagonal_cost = math.sqrt(2)  # √2 ≈ 1.414 for diagonal movement
+                    if i > 0 and j > 0:  # top-left
+                        directions.append((i-1, j-1, diagonal_cost))
+                    if i > 0 and j + 1 < self.x_dim:  # top-right
+                        directions.append((i-1, j+1, diagonal_cost))
+                    if i + 1 < self.y_dim and j > 0:  # bottom-left
+                        directions.append((i+1, j-1, diagonal_cost))
+                    if i + 1 < self.y_dim and j + 1 < self.x_dim:  # bottom-right
+                        directions.append((i+1, j+1, diagonal_cost))
+
+                # Update edge costs for all neighbors
+                for ni, nj, base_multiplier in directions:
+                    neighbor_cost = self.getTerrainCost(self.cells[ni][nj])
+                    edge_cost = max(current_cost, neighbor_cost) * base_multiplier
+                    neighbor_id = 'x' + str(nj) + 'y' + str(ni)
+
+                    # Update both parent and child edge costs
+                    node.parents[neighbor_id] = edge_cost
+                    node.children[neighbor_id] = edge_cost
 
     def reset_for_new_planning(self):
         """Reset D* Lite algorithm state for new start/goal planning

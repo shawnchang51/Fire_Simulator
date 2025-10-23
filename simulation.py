@@ -335,11 +335,35 @@ class EvacuationAgent():
             if self.targetidx >= len(self.targets) or current_type == 'exit':
                 return 'Evacuated'
             elif replan:
+                # Find a position beyond the door to evaluate the next room
+                # Use the next target in the path to determine direction
                 x, y = stateNameToCoords(current_location)
-                lx, ly = stateNameToCoords(self.position_history[-1]) if self.position_history else (None, None)
-                x = x + x - lx if lx is not None else x
-                y = y + y - ly if ly is not None else y
-                not_door_location = f'x{x}y{y}'
+
+                # Check if there's a next target to use for direction
+                if self.targetidx + 1 < len(self.targets):
+                    next_target = self.targets[self.targetidx + 1]
+                    next_x, next_y = stateNameToCoords(next_target)
+
+                    # Move one step toward next target
+                    dx = 1 if next_x > x else (-1 if next_x < x else 0)
+                    dy = 1 if next_y > y else (-1 if next_y < y else 0)
+
+                    peek_x = x + dx
+                    peek_y = y + dy
+                else:
+                    # No next target, use current agent position instead
+                    curr_x, curr_y = stateNameToCoords(self.s_current)
+                    dx = 1 if curr_x > x else (-1 if curr_x < x else 0)
+                    dy = 1 if curr_y > y else (-1 if curr_y < y else 0)
+
+                    peek_x = x + dx
+                    peek_y = y + dy
+
+                # Clamp to map bounds
+                peek_x = max(0, min(peek_x, self.graph.x_dim - 1))
+                peek_y = max(0, min(peek_y, self.graph.y_dim - 1))
+
+                not_door_location = f'x{peek_x}y{peek_y}'
                 self.update_lazy_graph(not_door_location)
                 result = self.replan_door_path(not_door_location)
                 if result is not None:

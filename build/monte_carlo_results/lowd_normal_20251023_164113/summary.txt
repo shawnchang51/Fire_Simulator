@@ -1,0 +1,54 @@
+
+================================================================================
+MONTE CARLO SIMULATION SUMMARY
+================================================================================
+
+Timestamp: 2025-10-23 16:41:13
+
+CONFIGURATION
+-------------
+Config File: config_used.json
+Map Size: 45 x 100
+Cell Size: 0.3m
+Timestep Duration: 0.5s
+Fire Update Interval: 2 timesteps
+Fire Model Type: aggressive
+Agents per Simulation: 200
+Viewing Range: 10 cells
+Max Occupancy: 1
+Number of Doors: 11
+
+EXECUTION
+---------
+Number of Runs: 2
+Execution Mode: SERIAL
+Processes Used: N/A
+Total Time: 112.58 seconds (1.88 minutes)
+Time per Run: 56.29 seconds
+
+RESULTS
+-------
+Total Agents: 400
+Evacuated Agents: 400
+Success Rate: 100.00%
+
+Average Steps: 78.00
+Average Fire Damage: 0.0310
+Average Peak Temperature: 20.39°C
+Average Temperature: 20.03°C
+
+PATH STATISTICS
+---------------
+Most Common Paths:
+  ('x86y40', 'x95y33'): 128 times
+  ('x28y40', 'x23y36', 'x15y36', 'x4y33'): 65 times
+  ('x89y22', 'x95y33'): 43 times
+  ('x10y21', 'x4y33'): 36 times
+  ('x95y33',): 24 times
+  ('x4y33',): 22 times
+  ('x28y6', 'x15y21', 'x15y36', 'x4y33'): 21 times
+  ('x23y36', 'x15y36', 'x4y33'): 19 times
+  ('x15y21', 'x15y36', 'x4y33'): 18 times
+  ('x15y36', 'x4y33'): 13 times
+
+================================================================================

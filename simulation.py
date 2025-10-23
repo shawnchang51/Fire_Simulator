@@ -327,8 +327,21 @@ class EvacuationAgent():
                 return 'No Door Path'
 
             self.targets = [self.door_graph.nodes[node].position for node in path]
-            self.targetidx = 0
-            self.target = self.targets[self.targetidx]
+
+            # If we're already at the first target (current door), skip to the next one
+            if len(self.targets) > 0 and self.targets[0] == current_location:
+                if len(self.targets) > 1:
+                    # Skip the current door, start from next target
+                    self.targetidx = 1
+                    self.target = self.targets[1]
+                else:
+                    # Only one target and we're already there - must be at exit
+                    self.targetidx = 0
+                    self.target = self.targets[0]
+            else:
+                # Normal case - start from first target
+                self.targetidx = 0
+                self.target = self.targets[0]
 
             try:
                 self.graph.setStart(self.s_current)
@@ -357,39 +370,23 @@ class EvacuationAgent():
             if self.targetidx >= len(self.targets) or current_type == 'exit':
                 return 'Evacuated'
             elif replan:
-                # Find a position beyond the door to evaluate the next room
-                # Use the next target in the path to determine direction
-                x, y = stateNameToCoords(current_location)
+                # Update door graph edge weights based on current fire conditions
+                # Then replan door path from current door position
+                self.update_lazy_graph(current_location)
 
-                # Check if there's a next target to use for direction
-                if self.targetidx + 1 < len(self.targets):
-                    next_target = self.targets[self.targetidx + 1]
-                    next_x, next_y = stateNameToCoords(next_target)
-
-                    # Move one step toward next target
-                    dx = 1 if next_x > x else (-1 if next_x < x else 0)
-                    dy = 1 if next_y > y else (-1 if next_y < y else 0)
-
-                    peek_x = x + dx
-                    peek_y = y + dy
-                else:
-                    # No next target, use current agent position instead
-                    curr_x, curr_y = stateNameToCoords(self.s_current)
-                    dx = 1 if curr_x > x else (-1 if curr_x < x else 0)
-                    dy = 1 if curr_y > y else (-1 if curr_y < y else 0)
-
-                    peek_x = x + dx
-                    peek_y = y + dy
-
-                # Clamp to map bounds
-                peek_x = max(0, min(peek_x, self.graph.x_dim - 1))
-                peek_y = max(0, min(peek_y, self.graph.y_dim - 1))
-
-                not_door_location = f'x{peek_x}y{peek_y}'
-                self.update_lazy_graph(not_door_location)
-                result = self.replan_door_path(not_door_location)
+                # Replan from the CURRENT DOOR POSITION, not from some peek position
+                # The door graph BFS will find reachable doors from here
+                result = self.replan_door_path(current_location)
                 if result is not None:
                     return result
+
+                # Replanning succeeded - replan_door_path already:
+                # 1. Set self.targets to new path
+                # 2. Reset self.targetidx to 0
+                # 3. Set self.target to targets[0]
+                # 4. Initialized D* Lite for the new target
+                # So we're done - return None to indicate success
+                return None
             else:
                 try:
                     self.target = self.targets[self.targetidx]
@@ -480,24 +477,31 @@ class EvacuationAgent():
 
             if target_reached:
                 # Move to new position if not stuck
-                if self.s_new != 'stuck' and self.s_new != self.s_current:
-                    coord_current = stateNameToCoords(self.s_current)
-                    coord_new = stateNameToCoords(self.s_new)
+                if self.s_new != 'stuck' and self.s_new != 'goal' and self.s_new != self.s_current:
+                    # Validate s_new is a valid coordinate before parsing
+                    if isinstance(self.s_new, str) and self.s_new.startswith('x') and 'y' in self.s_new:
+                        try:
+                            coord_current = stateNameToCoords(self.s_current)
+                            coord_new = stateNameToCoords(self.s_new)
 
-                    # Bounds check before updating occupancy
-                    if (0 <= coord_current[1] < len(self.occupancy) and
-                        0 <= coord_current[0] < len(self.occupancy[0])):
-                        self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                            # Bounds check before updating occupancy
+                            if (0 <= coord_current[1] < len(self.occupancy) and
+                                0 <= coord_current[0] < len(self.occupancy[0])):
+                                self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                            else:
+                                print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_current}")
+
+                            if (0 <= coord_new[1] < len(self.occupancy) and
+                                0 <= coord_new[0] < len(self.occupancy[0])):
+                                self.occupancy[coord_new[1]][coord_new[0]] += 1
+                            else:
+                                print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_new}")
+
+                            self.s_current = self.s_new
+                        except Exception as e:
+                            print(f"Error: Agent {self.id} failed to parse coordinates s_new='{self.s_new}': {e}")
                     else:
-                        print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_current}")
-
-                    if (0 <= coord_new[1] < len(self.occupancy) and
-                        0 <= coord_new[0] < len(self.occupancy[0])):
-                        self.occupancy[coord_new[1]][coord_new[0]] += 1
-                    else:
-                        print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_new}")
-
-                    self.s_current = self.s_new
+                        print(f"Error: Agent {self.id} has invalid s_new '{self.s_new}' when target reached")
 
                 self.position_history.append(self.s_current)
                 # Use the door position for replanning, not current position
@@ -508,13 +512,12 @@ class EvacuationAgent():
                         0 <= coord_current[0] < len(self.occupancy[0])):
                         self.occupancy[coord_current[1]][coord_current[0]] -= 1
                     return 'Evacuated'
-                try:
-                    self.queue, self.k_m = self.graph.reset_for_new_planning()
-                    self.graph, self.queue, self.k_m, self.queue_set = initDStarLite(self.graph, self.queue, self.s_current, self.target, self.k_m)
-                except Exception as e:
-                    print(f"Error: Failed to initialize new path for agent {self.id} to target {self.target}: {e}")
-                    return f'Path Planning Error: {e}'
+                elif result is not None:
+                    # Replanning failed - return the error
+                    return result
 
+                # Replanning succeeded - replan_door_path already initialized D* Lite
+                # Don't initialize again!
                 return 'New Target Set'
             elif self.s_new == 'stuck':
                 if (0 <= coord_current[1] < len(self.occupancy) and
@@ -522,6 +525,15 @@ class EvacuationAgent():
                     self.occupancy[coord_current[1]][coord_current[0]] -= 1
                 return 'stuck'
             else:
+                # Validate that s_new is a valid coordinate string before parsing
+                if not isinstance(self.s_new, str) or not self.s_new.startswith('x') or 'y' not in self.s_new:
+                    print(f"Warning: Agent {self.id} received invalid s_new: '{self.s_new}' (expected format 'x{{col}}y{{row}}')")
+                    # Treat as stuck since we can't parse the position
+                    if (0 <= coord_current[1] < len(self.occupancy) and
+                        0 <= coord_current[0] < len(self.occupancy[0])):
+                        self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                    return 'stuck'
+
                 coord_current = stateNameToCoords(self.s_current)
                 coord_new = stateNameToCoords(self.s_new)
 
@@ -542,7 +554,11 @@ class EvacuationAgent():
                 return None
 
         except Exception as e:
+            import traceback
             print(f"Critical error in move() for agent {self.id}: {e}")
+            print(f"Full traceback:")
+            traceback.print_exc()
+            print(f"Agent state: s_current={self.s_current}, targetidx={self.targetidx}, targets={self.targets}")
             return f'Critical Movement Error: {e}'
         
     def update_graph(self, changes):

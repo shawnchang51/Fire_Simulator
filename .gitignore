@@ -8,3 +8,4 @@
 CLAUDE.md
 *.json
 !example_configuration.json
+!configs/*

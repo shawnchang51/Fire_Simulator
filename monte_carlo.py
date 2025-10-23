@@ -111,12 +111,22 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
     Agents can't be placed on fire, doors, exits, or obstacles.
     Also validates that each agent can reach an exit through the door graph.
 
+    Additionally, assigns random fearness values to each agent based on config.agent_fearness:
+    - If agent_fearness has 2+ values: Random uniform between first two values
+    - If agent_fearness has 1 value: Use that value for all agents
+    - If agent_fearness is empty/None: Default to 1.0 for all agents
+
     Args:
         config: Simulation configuration
         num_agents: Number of agents (if None, uses config.agent_num)
 
     Returns:
-        Updated configuration with new agent starting positions
+        Updated configuration with new agent starting positions and fearness values
+
+    Example:
+        config.agent_fearness = [0.5, 1.5]  # Each agent gets random fear in [0.5, 1.5]
+        config.agent_fearness = [1.0]       # All agents get fear = 1.0
+        config.agent_fearness = None        # All agents get default fear = 1.0
     """
     if num_agents is None:
         num_agents = config.agent_num
@@ -178,6 +188,21 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
 
     # Convert to state names format
     new_start_positions = [coordsToStateName(col_idx, row_idx) for row_idx, col_idx in agent_positions]
+
+    # Randomly assign fearness values between first two values in agent_fearness
+    if config.agent_fearness and len(config.agent_fearness) >= 2:
+        min_fear = min(config.agent_fearness[0], config.agent_fearness[1])
+        max_fear = max(config.agent_fearness[0], config.agent_fearness[1])
+
+        # Generate random fearness for each agent between min and max
+        new_fearness = [random.uniform(min_fear, max_fear) for _ in range(num_agents)]
+        config.agent_fearness = new_fearness
+    elif config.agent_fearness and len(config.agent_fearness) == 1:
+        # If only one value, use it for all agents
+        config.agent_fearness = [config.agent_fearness[0]] * num_agents
+    else:
+        # No fearness specified, use default 1.0 for all
+        config.agent_fearness = [1.0] * num_agents
 
     # Update config
     config.start_positions = new_start_positions

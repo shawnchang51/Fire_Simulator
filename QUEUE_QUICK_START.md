@@ -66,6 +66,11 @@ scenario1_20250123_143052_001/
 - ✅ Path frequency analysis
 - ✅ Configuration snapshot
 
+### Randomization Per Run:
+- 🎲 **Random agent positions** - Different start positions each run
+- 🔥 **Random fire positions** - Different fire locations each run
+- 😨 **Random agent fearness** - Each agent gets random fear value between first two values in `agent_fearness`
+
 ### Aggregated Statistics:
 - 📈 Success rate (% of agents evacuated)
 - ⏱️ Average evacuation time

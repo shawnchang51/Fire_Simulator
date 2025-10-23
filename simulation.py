@@ -440,19 +440,20 @@ class EvacuationAgent():
             if len(self.position_history) > 5:
                 self.position_history.pop(0)
 
-            # Check if agent reached target door (either on it or adjacent to it within 2 cells)
+            # Check if agent reached target door (must be ON it or immediately adjacent)
             target_reached = False
             coord_target = stateNameToCoords(self.target)
 
             if self.s_new == 'goal' or self.s_new == self.target:
                 target_reached = True
             else:
-                # Check if close to target (within 2 cells in 8-directions)
+                # Check if immediately adjacent to target (within 1 cell in 8-directions)
                 coord_new = stateNameToCoords(self.s_new) if self.s_new != 'stuck' else None
                 if coord_new:
                     dx = abs(coord_new[0] - coord_target[0])
                     dy = abs(coord_new[1] - coord_target[1])
-                    if dx <= 2 and dy <= 2:  # Within 2 cells
+                    # Only count as reached if adjacent or on top (max distance = 1)
+                    if dx <= 1 and dy <= 1 and (dx + dy) > 0:  # Adjacent but not same cell
                         target_reached = True
 
             if target_reached:

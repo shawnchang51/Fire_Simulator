@@ -109,6 +109,7 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
     """
     Replace agent starting positions with random valid locations.
     Agents can't be placed on fire, doors, exits, or obstacles.
+    Also validates that each agent can reach an exit through the door graph.
 
     Args:
         config: Simulation configuration
@@ -143,10 +144,36 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
             if (row_idx, col_idx) not in invalid_positions:
                 valid_positions.append((row_idx, col_idx))
 
-    # Randomly select agent positions
     if len(valid_positions) < num_agents:
         raise ValueError(f"Not enough valid positions for {num_agents} agents. Only {len(valid_positions)} available.")
 
+    # If using door graphs, validate that agents can reach exits
+    if config.door_configs:
+        from door_graph import build_door_graph, replan_path
+
+        # Build door graph to test connectivity
+        door_graph = build_door_graph(config.initial_fire_map, config.door_configs)
+
+        # Filter positions to only those with valid paths to exits
+        reachable_positions = []
+        for row_idx, col_idx in valid_positions:
+            pos = coordsToStateName(col_idx, row_idx)
+            # Test if this position can reach an exit
+            path = replan_path(door_graph, pos, config.initial_fire_map)
+            if path is not None:
+                reachable_positions.append((row_idx, col_idx))
+
+        if len(reachable_positions) < num_agents:
+            raise ValueError(
+                f"Not enough reachable positions for {num_agents} agents. "
+                f"Only {len(reachable_positions)} positions have valid paths to exits "
+                f"(out of {len(valid_positions)} obstacle-free positions)."
+            )
+
+        # Use only reachable positions
+        valid_positions = reachable_positions
+
+    # Randomly select agent positions
     agent_positions = random.sample(valid_positions, num_agents)
 
     # Convert to state names format

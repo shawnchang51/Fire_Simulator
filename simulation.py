@@ -372,14 +372,28 @@ class EvacuationAgent():
     def move(self):
         self.total_steps += 1
         coord_current = stateNameToCoords(self.s_current)
+
+        # Validate coordinates are within bounds
+        if (coord_current[1] < 0 or coord_current[1] >= len(self.graph.cells) or
+            coord_current[0] < 0 or coord_current[0] >= len(self.graph.cells[0])):
+            print(f"Error: Agent {self.id} at invalid position {self.s_current} -> coords {coord_current}")
+            return 'stuck'
+
         if(self.graph.cells[coord_current[1]][coord_current[0]] < 0):
             print(f"Warning: Agent {self.id} starting on an obstacle at {self.s_current}!")
             return 'stuck'
         else:
             self.fire_damage += self.graph.cells[coord_current[1]][coord_current[0]]
-            temp = self.fire_model.temperature_map[coord_current[1]][coord_current[0]]
-            self.average_temp = (self.average_temp * (self.total_steps - 1) + temp) / self.total_steps
-            self.peak_temp = max(self.peak_temp, temp)
+
+            # Safely access temperature map with bounds checking
+            try:
+                temp = self.fire_model.temperature_map[coord_current[1]][coord_current[0]]
+                self.average_temp = (self.average_temp * (self.total_steps - 1) + temp) / self.total_steps
+                self.peak_temp = max(self.peak_temp, temp)
+            except (IndexError, AttributeError) as e:
+                # If temperature map doesn't exist or is wrong size, use default
+                print(f"Warning: Agent {self.id} cannot access temperature at {coord_current}: {e}")
+                # Continue without updating temperature stats
                     
         try:
             if self.s_current in self.position_history[-3:]:  # Check last 3 positions
@@ -421,9 +435,21 @@ class EvacuationAgent():
                 # Move to new position if not stuck
                 if self.s_new != 'stuck' and self.s_new != self.s_current:
                     coord_current = stateNameToCoords(self.s_current)
-                    self.occupancy[coord_current[1]][coord_current[0]] -= 1
                     coord_new = stateNameToCoords(self.s_new)
-                    self.occupancy[coord_new[1]][coord_new[0]] += 1
+
+                    # Bounds check before updating occupancy
+                    if (0 <= coord_current[1] < len(self.occupancy) and
+                        0 <= coord_current[0] < len(self.occupancy[0])):
+                        self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                    else:
+                        print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_current}")
+
+                    if (0 <= coord_new[1] < len(self.occupancy) and
+                        0 <= coord_new[0] < len(self.occupancy[0])):
+                        self.occupancy[coord_new[1]][coord_new[0]] += 1
+                    else:
+                        print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_new}")
+
                     self.s_current = self.s_new
 
                 self.position_history.append(self.s_current)
@@ -431,7 +457,9 @@ class EvacuationAgent():
                 result = self.set_next_target(self.target, replan=True)
                 if result == 'Evacuated':
                     coord_current = stateNameToCoords(self.s_current)
-                    self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                    if (0 <= coord_current[1] < len(self.occupancy) and
+                        0 <= coord_current[0] < len(self.occupancy[0])):
+                        self.occupancy[coord_current[1]][coord_current[0]] -= 1
                     return 'Evacuated'
                 try:
                     self.queue, self.k_m = self.graph.reset_for_new_planning()
@@ -442,13 +470,26 @@ class EvacuationAgent():
 
                 return 'New Target Set'
             elif self.s_new == 'stuck':
-                self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                if (0 <= coord_current[1] < len(self.occupancy) and
+                    0 <= coord_current[0] < len(self.occupancy[0])):
+                    self.occupancy[coord_current[1]][coord_current[0]] -= 1
                 return 'stuck'
             else:
                 coord_current = stateNameToCoords(self.s_current)
-                self.occupancy[coord_current[1]][coord_current[0]] -= 1
                 coord_new = stateNameToCoords(self.s_new)
-                self.occupancy[coord_new[1]][coord_new[0]] += 1
+
+                # Bounds check before updating occupancy
+                if (0 <= coord_current[1] < len(self.occupancy) and
+                    0 <= coord_current[0] < len(self.occupancy[0])):
+                    self.occupancy[coord_current[1]][coord_current[0]] -= 1
+                else:
+                    print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_current}")
+
+                if (0 <= coord_new[1] < len(self.occupancy) and
+                    0 <= coord_new[0] < len(self.occupancy[0])):
+                    self.occupancy[coord_new[1]][coord_new[0]] += 1
+                else:
+                    print(f"Warning: Agent {self.id} cannot update occupancy at invalid position {coord_new}")
 
                 self.s_current = self.s_new
                 return None

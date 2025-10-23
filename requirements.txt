@@ -1,4 +1,24 @@
-numpy
-matplotlib
-pygame
-scipy
+# Core dependencies
+numpy>=1.21.0
+pretty-errors>=1.2.25
+
+# Visualization dependencies
+pygame>=2.1.0  # Optional for graphical visualization
+scipy>=1.7.0   # Required for MATLAB-style visualization
+matplotlib>=3.4.0  # Required for plotting
+
+# Data handling
+pandas>=1.3.0  # For CSV export and data analysis
+json5>=0.9.5   # For robust JSON handling
+
+# Development tools
+black>=21.5b2  # Code formatting
+pylint>=2.8.2  # Code analysis
+pytest>=6.2.4  # Testing framework
+
+# Documentation
+sphinx>=4.0.2  # For generating documentation
+sphinx-rtd-theme>=0.5.2  # Documentation theme
+
+# Optional performance improvements
+numba>=0.53.1  # For accelerating numerical computations

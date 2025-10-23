@@ -58,6 +58,16 @@ def save_comprehensive_results(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Helper function to convert non-JSON-serializable keys (like tuples) to strings
+    def convert_dict_keys_to_strings(obj):
+        """Recursively convert dictionary keys to strings for JSON serialization."""
+        if isinstance(obj, dict):
+            return {str(k): convert_dict_keys_to_strings(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_dict_keys_to_strings(item) for item in obj]
+        else:
+            return obj
+
     # 1. Save FULL results (every simulation run)
     full_results_path = output_dir / "full_results.json"
     full_data = {
@@ -70,8 +80,8 @@ def save_comprehensive_results(
             "time_per_run_seconds": elapsed_time / num_runs if num_runs > 0 else 0,
         },
         "configuration": config.to_dict(),
-        "individual_runs": results,
-        "aggregated_statistics": statistics
+        "individual_runs": convert_dict_keys_to_strings(results),
+        "aggregated_statistics": convert_dict_keys_to_strings(statistics)
     }
 
     with open(full_results_path, 'w', encoding='utf-8') as f:
@@ -81,7 +91,7 @@ def save_comprehensive_results(
     # 2. Save statistics only (smaller file)
     stats_path = output_dir / "statistics.json"
     with open(stats_path, 'w', encoding='utf-8') as f:
-        json.dump(statistics, f, indent=2)
+        json.dump(convert_dict_keys_to_strings(statistics), f, indent=2)
     print(f"  ✓ Saved statistics to: {stats_path}")
 
     # 3. Save configuration used

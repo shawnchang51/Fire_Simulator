@@ -12,6 +12,7 @@ Features:
 - Parallel execution using multiprocessing for large-scale simulations
 - Reproducible results with random seed control
 - Comprehensive statistics aggregation
+- Automatic file saving with full results, statistics, and human-readable summaries
 
 Usage:
     # Serial mode (10 runs)
@@ -20,14 +21,22 @@ Usage:
     # Parallel mode using all CPU cores
     python monte_carlo.py --runs 100 --parallel
 
-    # Parallel mode with specific number of processes
-    python monte_carlo.py --runs 50 --parallel --processes 4
+    # Parallel mode with specific number of processes and custom output directory
+    python monte_carlo.py --runs 50 --parallel --processes 4 --output ./my_results
+
+Output:
+    Creates ./monte_carlo_results/{config_name}_{timestamp}/
+        - full_results.json      (complete simulation data)
+        - summary.txt            (human-readable summary)
+        - statistics.json        (aggregated statistics)
+        - config_used.json       (configuration that was used)
 
 Functions:
     replace_fire(config, num_fires): Randomly place fire on valid positions
     replace_agents(config, num_agents): Randomly place agents on valid positions
     run_monte_carlo_simulation(config, num_runs, seed): Serial execution
     run_monte_carlo_parallel(config, num_runs, seed, num_processes): Parallel execution
+    save_comprehensive_results(config, results, statistics, ...): Save results to files
 """
 
 from simulation import EvacuationSimulation, SimulationConfig
@@ -39,6 +48,9 @@ import multiprocessing as mp
 from multiprocessing import Pool, cpu_count
 import copy
 from functools import partial
+from pathlib import Path
+from datetime import datetime
+import time
 
 try:
     from tqdm import tqdm
@@ -446,6 +458,138 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
 
     return results, statistics
 
+
+def save_comprehensive_results(
+    config: SimulationConfig,
+    results: list,
+    statistics: dict,
+    output_dir: Path,
+    elapsed_time: float,
+    num_runs: int,
+    mode: str,
+    num_processes: int = None
+):
+    """
+    Save complete Monte Carlo results to multiple files for full traceability.
+
+    Args:
+        config: The configuration used
+        results: List of individual simulation results
+        statistics: Aggregated statistics
+        output_dir: Directory to save results
+        elapsed_time: Total time taken
+        num_runs: Number of runs performed
+        mode: 'serial' or 'parallel'
+        num_processes: Number of processes used (if parallel)
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Helper function to convert non-JSON-serializable keys (like tuples) to strings
+    def convert_dict_keys_to_strings(obj):
+        """Recursively convert dictionary keys to strings for JSON serialization."""
+        if isinstance(obj, dict):
+            return {str(k): convert_dict_keys_to_strings(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_dict_keys_to_strings(item) for item in obj]
+        else:
+            return obj
+
+    # 1. Save FULL results (every simulation run)
+    full_results_path = output_dir / "full_results.json"
+    full_data = {
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "num_runs": num_runs,
+            "mode": mode,
+            "num_processes": num_processes,
+            "elapsed_time_seconds": elapsed_time,
+            "time_per_run_seconds": elapsed_time / num_runs if num_runs > 0 else 0,
+        },
+        "configuration": config.to_dict(),
+        "individual_runs": convert_dict_keys_to_strings(results),
+        "aggregated_statistics": convert_dict_keys_to_strings(statistics)
+    }
+
+    with open(full_results_path, 'w', encoding='utf-8') as f:
+        json.dump(full_data, f, indent=2)
+    print(f"  ✓ Saved full results to: {full_results_path}")
+
+    # 2. Save statistics only (smaller file)
+    stats_path = output_dir / "statistics.json"
+    with open(stats_path, 'w', encoding='utf-8') as f:
+        json.dump(convert_dict_keys_to_strings(statistics), f, indent=2)
+    print(f"  ✓ Saved statistics to: {stats_path}")
+
+    # 3. Save configuration used
+    config_path = output_dir / "config_used.json"
+    with open(config_path, 'w', encoding='utf-8') as f:
+        json.dump(config.to_dict(), f, indent=2)
+    print(f"  ✓ Saved configuration to: {config_path}")
+
+    # 4. Save human-readable summary
+    summary_path = output_dir / "summary.txt"
+    total_agents = num_runs * config.agent_num
+    success_rate = (statistics['evacuated_agents'] / total_agents * 100) if total_agents > 0 else 0
+
+    summary_text = f"""
+{'='*80}
+MONTE CARLO SIMULATION SUMMARY
+{'='*80}
+
+Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+CONFIGURATION
+-------------
+Config File: {config_path.name}
+Map Size: {config.map_rows} x {config.map_cols}
+Cell Size: {config.cell_size}m
+Timestep Duration: {config.timestep_duration}s
+Fire Update Interval: {config.fire_update_interval} timesteps
+Fire Model Type: {config.fire_model_type}
+Agents per Simulation: {config.agent_num}
+Viewing Range: {config.viewing_range} cells
+Max Occupancy: {config.max_occupancy}
+Number of Doors: {len(config.door_configs) if config.door_configs else 0}
+
+EXECUTION
+---------
+Number of Runs: {num_runs}
+Execution Mode: {mode.upper()}
+Processes Used: {num_processes if num_processes else 'N/A'}
+Total Time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)
+Time per Run: {elapsed_time/num_runs:.2f} seconds
+
+RESULTS
+-------
+Total Agents: {total_agents}
+Evacuated Agents: {statistics['evacuated_agents']}
+Success Rate: {success_rate:.2f}%
+
+Average Steps: {statistics['average_steps']:.2f}
+Average Fire Damage: {statistics['average_fire_damage']:.4f}
+Average Peak Temperature: {statistics['average_peak_temp']:.2f}°C
+Average Temperature: {statistics['average_avg_temp']:.2f}°C
+
+PATH STATISTICS
+---------------
+"""
+
+    # Add path count details
+    if statistics.get('path_count'):
+        summary_text += "Most Common Paths:\n"
+        sorted_paths = sorted(statistics['path_count'].items(), key=lambda x: x[1], reverse=True)
+        for path, count in sorted_paths[:10]:  # Top 10 paths
+            summary_text += f"  {path}: {count} times\n"
+
+    summary_text += f"\n{'='*80}\n"
+
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        f.write(summary_text)
+    print(f"  ✓ Saved summary to: {summary_path}")
+
+    print(f"\n  📁 All results saved to: {output_dir}\n")
+
+
 if __name__ == "__main__":
     # Required for Windows multiprocessing support
     mp.freeze_support()
@@ -465,6 +609,16 @@ Examples:
 
   # Use custom configuration file:
   python monte_carlo.py --config my_config.json --runs 20 --parallel
+
+  # Specify custom output directory:
+  python monte_carlo.py --runs 50 --parallel --output ./my_results
+
+Output:
+  Creates ./monte_carlo_results/{config_name}_{timestamp}/
+      - full_results.json      (complete simulation data)
+      - summary.txt            (human-readable summary)
+      - statistics.json        (aggregated statistics)
+      - config_used.json       (configuration that was used)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -497,6 +651,12 @@ Examples:
         default=None,
         help="Number of processes for parallel execution (default: all CPU cores)"
     )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="./monte_carlo_results",
+        help="Base directory for output files (default: ./monte_carlo_results)"
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -507,7 +667,6 @@ Examples:
     sim_config = SimulationConfig.from_json(json_config)
 
     # Run simulations
-    import time
     start_time = time.time()
 
     if args.parallel:
@@ -528,21 +687,42 @@ Examples:
 
     elapsed_time = time.time() - start_time
 
-    # Print summary
-    print(f"\n{'='*60}")
-    print(f"MONTE CARLO SIMULATION SUMMARY")
+    # Create output directory with timestamp and config name
+    config_name = Path(args.config).stem
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_base_dir = Path(args.output)
+    output_dir = output_base_dir / f"{config_name}_{timestamp}"
+
+    # Save comprehensive results
+    print(f"\n📊 Saving results...")
+    mode = 'parallel' if args.parallel else 'serial'
+    save_comprehensive_results(
+        config=sim_config,
+        results=results,
+        statistics=statistics,
+        output_dir=output_dir,
+        elapsed_time=elapsed_time,
+        num_runs=args.runs,
+        mode=mode,
+        num_processes=args.processes
+    )
+
+    # Print brief summary to console
+    total_agents = args.runs * sim_config.agent_num
+    success_rate = (statistics['evacuated_agents'] / total_agents * 100) if total_agents > 0 else 0
+
+    print(f"{'='*60}")
+    print(f"QUICK SUMMARY")
     print(f"{'='*60}")
     print(f"Total runs: {args.runs}")
     print(f"Mode: {'Parallel' if args.parallel else 'Serial'}")
     if args.parallel:
         print(f"Processes used: {args.processes or cpu_count()}")
-    print(f"Time elapsed: {elapsed_time:.2f} seconds")
+    print(f"Time elapsed: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
     print(f"Average time per run: {elapsed_time/args.runs:.2f} seconds")
-    print(f"\nStatistics:")
-    print(f"  Average steps: {statistics['average_steps']:.2f}")
-    print(f"  Average fire damage: {statistics['average_fire_damage']:.2f}")
-    print(f"  Average peak temperature: {statistics['average_peak_temp']:.2f}")
-    print(f"  Average temperature: {statistics['average_avg_temp']:.2f}")
-    print(f"  Total evacuated agents: {statistics['evacuated_agents']}")
-    print(f"  Total survived agents: {statistics['survived_agents']}")
+    print(f"\nSuccess Rate: {success_rate:.2f}%")
+    print(f"Evacuated: {statistics['evacuated_agents']}/{total_agents} agents")
+    if statistics.get('error_count', 0) > 0:
+        print(f"⚠️  Failed runs: {statistics['error_count']}/{args.runs}")
+    print(f"\n📁 Full results saved to: {output_dir}")
     print(f"{'='*60}\n")

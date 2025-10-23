@@ -105,6 +105,28 @@ class SimulationConfig:
                 config.viewing_range = recommended_range
 
         return config
+    
+    def to_dict(self):
+        return {
+            'map_rows': self.map_rows,
+            'map_cols': self.map_cols,
+            'max_occupancy': self.max_occupancy,
+            'start_positions': self.start_positions,
+            'initial_fire_map': self.initial_fire_map,
+            'agent_num': self.agent_num,
+            'viewing_range': self.viewing_range,
+            'cell_size': self.cell_size,
+            'timestep_duration': self.timestep_duration,
+            'fire_update_interval': self.fire_update_interval,
+            'fire_model_type': self.fire_model_type,
+            'agent_fearness': self.agent_fearness,
+            'door_configs': self.door_configs,
+            'consider_env_factors': self.consider_env_factors,
+            'wall_preference': self.wall_preference,
+            'communication_range': self.communication_range,
+            'sharing_interval': self.sharing_interval,
+            'sector_size': self.sector_size
+        }
 
 class EvacuationAgent():
     def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False, wall_distance_map=None, wall_preference=0.0, initial_fire_map=None):

@@ -708,7 +708,8 @@ class EvacuationSimulation():
         from spatial_index import SpatialIndex
 
         # Auto-calculate sector_size if not provided
-        sector_size = config.sector_size if config.sector_size is not None else int(config.communication_range)
+        # Ensure sector_size is at least 1 to avoid division by zero
+        sector_size = config.sector_size if config.sector_size is not None else max(1, int(config.communication_range))
 
         self.spatial_index = SpatialIndex(
             map_rows=config.map_rows,

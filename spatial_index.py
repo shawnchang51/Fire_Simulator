@@ -38,7 +38,8 @@ class SpatialIndex:
             sector_size (int): Size of each sector in cells. Should be approximately
                               equal to communication_range for optimal performance.
         """
-        self.sector_size = sector_size
+        # Ensure sector_size is at least 1 to avoid division by zero
+        self.sector_size = max(1, sector_size)
         self.map_rows = map_rows
         self.map_cols = map_cols
         self.sectors = {}  # {(sector_x, sector_y): [agent_indices]}

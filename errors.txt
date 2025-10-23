@@ -1,0 +1,65 @@
+when:
+  python .\monte_carlo_queue.py --queue-folder ./configs --run 10 --parallel
+what:
+  ❌ ERROR during simulation: list index out of range
+  multiprocessing.pool.RemoteTraceback:
+  """
+  Traceback (most recent call last):
+    File "C:\Users\Tcfsh_Info\AppData\Local\Programs\Python\Python312\Lib\multiprocessing\pool.py", line 125, in worker
+      result = (True, func(*args, **kwds))
+                      ^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\monte_carlo.py", line 303, in _run_single_simulation
+      config_copy = replace_fire(config_copy)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\monte_carlo.py", line 90, in replace_fire
+      new_fire_map = [[config.initial_fire_map[r][c] if config.initial_fire_map[r][c] == -2 else 0      
+                                                        ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  IndexError: list index out of range
+  """
+
+  The above exception was the direct cause of the following exception:
+
+  Traceback (most recent call last):
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\monte_carlo_queue.py", line 211, in process_config_file
+      results, statistics = run_monte_carlo_parallel(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\monte_carlo.py", line 346, in run_monte_carlo_parallel
+      results = list(tqdm(
+                ^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\.venv\Lib\site-packages\tqdm\std.py", line 1181, in __iter__
+      for obj in iterable:
+                ^^^^^^^^
+    File "C:\Users\Tcfsh_Info\AppData\Local\Programs\Python\Python312\Lib\multiprocessing\pool.py", line 873, in next
+      raise value
+  IndexError: list index out of range
+
+=============================================================================
+when:
+  in config json files
+  "communication_range": 0,
+  "sharing_interval": 50,
+what:
+  ❌ ERROR during simulation: integer division or modulo by zero
+  Traceback (most recent call last):
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\monte_carlo_queue.py", line 219, in process_config_file
+      results, statistics = run_monte_carlo_simulation(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\monte_carlo.py", line 261, in run_monte_carlo_simulation
+      result = sim.run(500, show_visualization=False, use_pygame=False, use_matlab=False)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\simulation.py", line 979, in run
+      self.spatial_index.update(self.agents)
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\spatial_index.py", line 97, in update
+      sector = self._get_sector(agent.s_current)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "C:\Users\Tcfsh_Info\Documents\Shawn\Fire\Fire_Simulator\spatial_index.py", line 61, in _get_sector
+      return (col // self.sector_size, row // self.sector_size)
+              ~~~~^^~~~~~~~~~~~~~~~~~
+  ZeroDivisionError: integer division or modulo by zero
+
+=============================================================================
+when:
+  running mote carlo queue
+what:
+  no output or cpu usage for a long long while
+  and pop out errors afterwards

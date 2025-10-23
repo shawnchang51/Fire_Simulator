@@ -66,7 +66,8 @@ def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationCon
 
     # Get actual dimensions from the fire map itself (not from config)
     actual_rows = len(config.initial_fire_map)
-    actual_cols = len(config.initial_fire_map[0]) if actual_rows > 0 else 0
+    # Handle jagged arrays by finding the maximum column count
+    actual_cols = max(len(row) for row in config.initial_fire_map) if actual_rows > 0 else 0
 
     # Create set of invalid positions (doors, exits, obstacles)
     invalid_positions = set()
@@ -92,9 +93,17 @@ def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationCon
                 valid_positions.append((row_idx, col_idx))
 
     # Create new fire map (copy obstacles from original)
-    new_fire_map = [[config.initial_fire_map[r][c] if config.initial_fire_map[r][c] == -2 else 0
-                     for c in range(actual_cols)]
-                    for r in range(actual_rows)]
+    # Handle jagged arrays by checking bounds for each row
+    new_fire_map = []
+    for r in range(actual_rows):
+        row_length = len(config.initial_fire_map[r])
+        new_row = []
+        for c in range(actual_cols):
+            if c < row_length and config.initial_fire_map[r][c] == -2:
+                new_row.append(-2)
+            else:
+                new_row.append(0)
+        new_fire_map.append(new_row)
 
     # Randomly select fire positions
     if len(valid_positions) < num_fires:
@@ -140,7 +149,8 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
 
     # Get actual dimensions from the fire map itself (not from config)
     actual_rows = len(config.initial_fire_map)
-    actual_cols = len(config.initial_fire_map[0]) if actual_rows > 0 else 0
+    # Handle jagged arrays by finding the maximum column count
+    actual_cols = max(len(row) for row in config.initial_fire_map) if actual_rows > 0 else 0
 
     # Create set of invalid positions (fire, doors, exits, obstacles)
     invalid_positions = set()
@@ -295,32 +305,54 @@ def _run_single_simulation(args):
         args: Tuple of (config, run_number, total_runs, seed)
 
     Returns:
-        Dictionary with simulation results
+        Dictionary with simulation results (or error result if failed)
     """
     config, run_number, total_runs, seed = args
 
-    # Set random seed for this specific run (for reproducibility)
-    if seed is not None:
-        random.seed(seed + run_number)
+    try:
+        # Set random seed for this specific run (for reproducibility)
+        if seed is not None:
+            random.seed(seed + run_number)
 
-    # Create a deep copy to avoid shared state between processes
-    config_copy = copy.deepcopy(config)
+        # Create a deep copy to avoid shared state between processes
+        config_copy = copy.deepcopy(config)
 
-    # Randomize fire and agent positions for THIS run
-    config_copy = replace_fire(config_copy)
-    config_copy = replace_agents(config_copy)
+        # Randomize fire and agent positions for THIS run
+        config_copy = replace_fire(config_copy)
+        config_copy = replace_agents(config_copy)
 
-    sim = EvacuationSimulation(config_copy, silent=True)
+        sim = EvacuationSimulation(config_copy, silent=True)
 
-    # Run without visualization for speed
-    result = sim.run(
-        max_steps=500,
-        show_visualization=False,
-        use_pygame=False,
-        use_matlab=False
-    )
+        # Run without visualization for speed
+        result = sim.run(
+            max_steps=500,
+            show_visualization=False,
+            use_pygame=False,
+            use_matlab=False
+        )
 
-    return result
+        return result
+
+    except Exception as e:
+        # Return error result instead of crashing the worker process
+        import traceback
+        error_msg = f"Run {run_number + 1}/{total_runs} failed: {str(e)}"
+        print(f"⚠️  {error_msg}")
+
+        # Return a minimal result dictionary to avoid breaking aggregation
+        return {
+            'status': 'error',
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'run_number': run_number,
+            'path_count': {},
+            'steps': 0,
+            'average_fire_damage': 0.0,
+            'average_peak_temp': 0.0,
+            'average_avg_temp': 0.0,
+            'evacuated_agents': 0,
+            'survived_agents': 0
+        }
 
 
 def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_seed: int = None, num_processes: int = None) -> tuple:
@@ -374,13 +406,22 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
     average_avg_temp = 0
     evacuated_agents = 0
     survived_agents = 0
+    error_count = 0
 
     for i, result in enumerate(results):
+        # Skip error results in averaging but count them
+        if result.get('status') == 'error':
+            error_count += 1
+            continue
+
         path_count = dict(Counter(path_count) + Counter(result['path_count']))
-        average_steps = (average_steps * i + result['steps']) / (i + 1)
-        average_fire_damage = (average_fire_damage * i + result['average_fire_damage']) / (i + 1)
-        average_peak_temp = (average_peak_temp * i + result['average_peak_temp']) / (i + 1)
-        average_avg_temp = (average_avg_temp * i + result['average_avg_temp']) / (i + 1)
+        # Only count successful runs in averaging
+        successful_runs = i + 1 - error_count
+        if successful_runs > 0:
+            average_steps = (average_steps * (successful_runs - 1) + result['steps']) / successful_runs
+            average_fire_damage = (average_fire_damage * (successful_runs - 1) + result['average_fire_damage']) / successful_runs
+            average_peak_temp = (average_peak_temp * (successful_runs - 1) + result['average_peak_temp']) / successful_runs
+            average_avg_temp = (average_avg_temp * (successful_runs - 1) + result['average_avg_temp']) / successful_runs
         evacuated_agents += result['evacuated_agents']
         survived_agents += result['survived_agents']
 
@@ -396,7 +437,11 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
     statistics['evacuated_agents'] = evacuated_agents
     statistics['survived_agents'] = survived_agents
     statistics['success_rate'] = success_rate
+    statistics['error_count'] = error_count
+    statistics['successful_runs'] = num_runs - error_count
 
+    if error_count > 0:
+        print(f"⚠️  Warning: {error_count}/{num_runs} simulations failed with errors")
     print(f"Overall Success Rate: {success_rate:.1f}% ({evacuated_agents}/{total_agents} agents evacuated)")
 
     return results, statistics

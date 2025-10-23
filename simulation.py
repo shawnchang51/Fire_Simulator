@@ -562,9 +562,22 @@ class EvacuationAgent():
             return f'Critical Movement Error: {e}'
         
     def update_graph(self, changes):
-        # Track all affected cells for vertex updates
+        """Update graph with terrain changes using D* Lite incremental replanning.
+
+        Following the reference D* Lite implementation approach:
+        1. Update only the specific cells that changed
+        2. Recalculate edge costs ONLY for affected cells and their neighbors
+        3. Call updateVertex() for affected vertices
+        4. Let D* Lite incrementally replan
+
+        This avoids the performance penalty of updating the entire graph.
+        """
+        import math
+        from d_star_lite.d_star_lite import updateVertex, computeShortestPath
+
         affected_cells = set()
 
+        # First pass: update cell values that explicitly changed
         for(coord, value) in changes.items():
             try:
                 x, y = stateNameToCoords(coord)
@@ -576,37 +589,67 @@ class EvacuationAgent():
             except Exception as e:
                 print(f"Warning: Agent {self.id} failed to process graph update for {coord}: {e}")
 
-        # If considering environmental factors OR wall preference, update all cells with costs
+        # If considering environmental factors OR wall preference, recalculate costs for changed cells
         if (self.consider_env_factors and self.fire_model is not None) or self.wall_preference > 0:
             try:
-                for y in range(self.graph.y_dim):
-                    for x in range(self.graph.x_dim):
-                        # Calculate and apply environmental cost (includes wall preference)
-                        env_cost = self.calculate_environmental_cost(y, x)
-                        self.graph.cells[y][x] = env_cost
-                        # When recalculating all costs, mark all cells as affected
-                        affected_cells.add((x, y))
+                # Only recalculate for cells that changed, not the entire grid!
+                for (x, y) in list(affected_cells):
+                    env_cost = self.calculate_environmental_cost(y, x)
+                    self.graph.cells[y][x] = env_cost
             except Exception as e:
                 print(f"Warning: Agent {self.id} failed to apply environmental costs: {e}")
 
-        # Update graph edge costs based on new terrain
-        # This preserves D* Lite state (g and rhs values) for incremental replanning
-        self.graph.updateGraphFromTerrain()
+        # Update edge costs ONLY for affected cells (following reference implementation pattern)
+        # This is much more efficient than updateGraphFromTerrain() which updates everything
+        diagonal_cost = math.sqrt(2)
+        for (x, y) in affected_cells:
+            node_id = f'x{x}y{y}'
+            if node_id not in self.graph.graph:
+                continue
+
+            node = self.graph.graph[node_id]
+            current_cost = self.graph.getTerrainCost(self.graph.cells[y][x])
+
+            # Update edge costs to all neighbors (8-connected)
+            neighbors = [
+                (y-1, x, 1.0),     # top
+                (y+1, x, 1.0),     # bottom
+                (y, x-1, 1.0),     # left
+                (y, x+1, 1.0),     # right
+            ]
+            if self.graph.connect8:
+                neighbors.extend([
+                    (y-1, x-1, diagonal_cost),  # top-left
+                    (y-1, x+1, diagonal_cost),  # top-right
+                    (y+1, x-1, diagonal_cost),  # bottom-left
+                    (y+1, x+1, diagonal_cost),  # bottom-right
+                ])
+
+            for ny, nx, base_mult in neighbors:
+                if 0 <= ny < self.graph.y_dim and 0 <= nx < self.graph.x_dim:
+                    neighbor_id = f'x{nx}y{ny}'
+                    neighbor_cost = self.graph.getTerrainCost(self.graph.cells[ny][nx])
+                    edge_cost = max(current_cost, neighbor_cost) * base_mult
+
+                    # Update edge costs in both directions (like reference implementation)
+                    node.children[neighbor_id] = edge_cost
+                    node.parents[neighbor_id] = edge_cost
+
+                    # Also update the neighbor's edge back to this node
+                    if neighbor_id in self.graph.graph:
+                        self.graph.graph[neighbor_id].children[node_id] = edge_cost
+                        self.graph.graph[neighbor_id].parents[node_id] = edge_cost
 
         # D* Lite incremental update: mark affected vertices for replanning
-        # This is MUCH faster than reinitializing the entire algorithm
-        from d_star_lite.d_star_lite import updateVertex, computeShortestPath
         for (x, y) in affected_cells:
             state_id = f"x{x}y{y}"
             if state_id in self.graph.graph:
                 updateVertex(self.graph, self.queue, self.queue_set, state_id, self.s_current, self.k_m)
-                # Also update neighbors since edge costs changed
+                # Also update neighbors since their edge costs changed
                 for neighbor_id in self.graph.graph[state_id].children:
                     updateVertex(self.graph, self.queue, self.queue_set, neighbor_id, self.s_current, self.k_m)
 
-        # After marking all affected vertices, recompute the shortest path
-        # This is still much faster than full reinitialization because D* Lite
-        # only replans the affected portions of the path
+        # Recompute shortest path incrementally
         if affected_cells:
             computeShortestPath(self.graph, self.queue, self.queue_set, self.s_current, self.k_m)
 

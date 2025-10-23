@@ -167,9 +167,6 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_s
         num_runs (int): Number of simulation runs to perform.
     """
 
-    config = replace_fire(config)
-    config = replace_agents(config)
-
     random.seed(random_seed)
     results = []
     statistics = {}
@@ -185,7 +182,13 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int, random_s
     iterator = tqdm(range(num_runs), desc="Running simulations", unit="run") if TQDM_AVAILABLE else range(num_runs)
 
     for i in iterator:
-        sim = EvacuationSimulation(config, silent=True)
+        # Create a fresh copy of config for each simulation run
+        run_config = copy.deepcopy(config)
+        # Randomize fire and agent positions for THIS run
+        run_config = replace_fire(run_config)
+        run_config = replace_agents(run_config)
+
+        sim = EvacuationSimulation(run_config, silent=True)
         result = sim.run(500, show_visualization=False, use_pygame=False, use_matlab=False)
 
         results.append(result)
@@ -239,6 +242,10 @@ def _run_single_simulation(args):
     # Create a deep copy to avoid shared state between processes
     config_copy = copy.deepcopy(config)
 
+    # Randomize fire and agent positions for THIS run
+    config_copy = replace_fire(config_copy)
+    config_copy = replace_agents(config_copy)
+
     sim = EvacuationSimulation(config_copy, silent=True)
 
     # Run without visualization for speed
@@ -265,10 +272,6 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, random_see
     Returns:
         Tuple of (results, statistics)
     """
-    # Replace fire and agents once for the base configuration
-    config = replace_fire(config)
-    config = replace_agents(config)
-
     # Determine number of processes
     if num_processes is None:
         num_processes = cpu_count()

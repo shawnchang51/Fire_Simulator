@@ -64,6 +64,10 @@ def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationCon
         num_fires = sum(1 for row in config.initial_fire_map
                        for cell in row if cell > 0)
 
+    # Get actual dimensions from the fire map itself (not from config)
+    actual_rows = len(config.initial_fire_map)
+    actual_cols = len(config.initial_fire_map[0]) if actual_rows > 0 else 0
+
     # Create set of invalid positions (doors, exits, obstacles)
     invalid_positions = set()
 
@@ -80,16 +84,17 @@ def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationCon
                 invalid_positions.add((row_idx, col_idx))
 
     # Find all valid positions (not obstacles, doors, or exits)
+    # Use actual fire map dimensions, not config dimensions
     valid_positions = []
-    for row_idx in range(config.map_rows):
-        for col_idx in range(config.map_cols):
+    for row_idx in range(actual_rows):
+        for col_idx in range(actual_cols):
             if (row_idx, col_idx) not in invalid_positions:
                 valid_positions.append((row_idx, col_idx))
 
     # Create new fire map (copy obstacles from original)
     new_fire_map = [[config.initial_fire_map[r][c] if config.initial_fire_map[r][c] == -2 else 0
-                     for c in range(config.map_cols)]
-                    for r in range(config.map_rows)]
+                     for c in range(actual_cols)]
+                    for r in range(actual_rows)]
 
     # Randomly select fire positions
     if len(valid_positions) < num_fires:
@@ -101,8 +106,10 @@ def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationCon
     for row_idx, col_idx in fire_positions:
         new_fire_map[row_idx][col_idx] = 2.0
 
-    # Update config
+    # Update config with new fire map AND ensure map dimensions match actual fire map
     config.initial_fire_map = new_fire_map
+    config.map_rows = actual_rows
+    config.map_cols = actual_cols
     return config
 
 def replace_agents(config: SimulationConfig, num_agents: int=None) -> SimulationConfig:
@@ -131,6 +138,10 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
     if num_agents is None:
         num_agents = config.agent_num
 
+    # Get actual dimensions from the fire map itself (not from config)
+    actual_rows = len(config.initial_fire_map)
+    actual_cols = len(config.initial_fire_map[0]) if actual_rows > 0 else 0
+
     # Create set of invalid positions (fire, doors, exits, obstacles)
     invalid_positions = set()
 
@@ -148,9 +159,10 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
                 invalid_positions.add((row_idx, col_idx))
 
     # Find all valid positions
+    # Use actual fire map dimensions, not config dimensions
     valid_positions = []
-    for row_idx in range(config.map_rows):
-        for col_idx in range(config.map_cols):
+    for row_idx in range(actual_rows):
+        for col_idx in range(actual_cols):
             if (row_idx, col_idx) not in invalid_positions:
                 valid_positions.append((row_idx, col_idx))
 

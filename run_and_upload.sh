@@ -1,6 +1,6 @@
 #!/bin/bash
 # Automated Monte Carlo Runner with Upload
-# Runs simulations for multiple configurations and uploads results to transfer.sh
+# Runs simulations for multiple configurations and uploads results to Google Drive
 
 set -e  # Exit on any error
 
@@ -19,6 +19,12 @@ OUTPUT_DIR="monte_carlo_results"
 
 # Number of simulation runs per configuration
 NUM_RUNS=100
+
+# Google Drive remote name (configured in rclone)
+GDRIVE_REMOTE="gdrive"
+
+# Google Drive destination folder (relative to Drive root)
+GDRIVE_FOLDER="MonteCarloSimulations"
 
 # ============================================================
 # END CONFIGURATION
@@ -69,11 +75,11 @@ compress_and_upload() {
     local size=$(du -h "${archive_name}" | cut -f1)
     print_info "Archive size: ${size}"
 
-    print_info "Uploading ${archive_name} to transfer.sh via rclone..."
-    rclone copy "${archive_name}" transfer.sh:
+    print_info "Uploading ${archive_name} to Google Drive (${GDRIVE_REMOTE}:${GDRIVE_FOLDER})..."
+    rclone copy "${archive_name}" "${GDRIVE_REMOTE}:${GDRIVE_FOLDER}/"
 
     if [ $? -eq 0 ]; then
-        print_success "Upload completed: ${archive_name}"
+        print_success "Upload completed to Google Drive: ${GDRIVE_FOLDER}/${archive_name}"
 
         # Clean up local archive
         print_info "Cleaning up local archive..."
@@ -139,10 +145,11 @@ if ! command -v rclone &> /dev/null; then
     exit 1
 fi
 
-# Check if transfer.sh remote is configured
-if ! rclone listremotes | grep -q "transfer.sh:"; then
-    print_error "rclone remote 'transfer.sh' is not configured"
-    print_info "Please configure rclone with transfer.sh remote"
+# Check if Google Drive remote is configured
+if ! rclone listremotes | grep -q "${GDRIVE_REMOTE}:"; then
+    print_error "rclone remote '${GDRIVE_REMOTE}' is not configured"
+    print_info "Please configure rclone with Google Drive remote"
+    print_info "Run: rclone config"
     exit 1
 fi
 

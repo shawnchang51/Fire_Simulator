@@ -1,6 +1,12 @@
 #!/bin/bash
 # Helper script to choose between Nuitka compilation methods
 
+# Install Nuitka if not already installed
+echo "Updating package lists..."
+sudo apt update
+echo "Installing Nuitka..."
+sudo apt install nuitka -y
+
 echo "Monte Carlo Nuitka Compilation Options"
 echo "======================================="
 echo ""

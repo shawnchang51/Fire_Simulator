@@ -6,7 +6,7 @@ echo "Starting Nuitka compilation..."
 echo "This may take 5-15 minutes depending on your server specs."
 echo ""
 
-nuitka \
+nuitka3 \
   --standalone \
   --follow-imports \
   --lto=yes \

@@ -7,7 +7,7 @@ echo "This may take 10-20 minutes depending on your server specs."
 echo "Note: --onefile has slower startup but creates a single portable executable."
 echo ""
 
-python -m nuitka \
+nuitka3 \
   --standalone \
   --onefile \
   --enable-plugin=multiprocessing \

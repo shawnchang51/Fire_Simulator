@@ -11,12 +11,8 @@ set -e  # Exit on any error
 # Simulation executable (Python script or compiled binary)
 SIM_EXECUTABLE="python monte_carlo.py"
 
-# List of JSON configuration files to process
-JSON_FILES=(
-    "example_configuration.json"
-    "config1.json"
-    "config2.json"
-)
+# Directory containing JSON configuration files
+JSON_DIR="configs"
 
 # Output directory (will be created if doesn't exist)
 OUTPUT_DIR="monte_carlo_results"
@@ -95,11 +91,45 @@ echo "============================================================"
 echo "  Monte Carlo Simulation Runner with Auto-Upload"
 echo "============================================================"
 echo ""
+
+# Check if JSON directory exists
+if [ ! -d "${JSON_DIR}" ]; then
+    print_error "JSON directory not found: ${JSON_DIR}"
+    print_info "Please create the directory and add JSON configuration files."
+    print_info "Example: mkdir ${JSON_DIR}"
+    exit 1
+fi
+
+# Find all JSON files in the directory
+print_info "Scanning ${JSON_DIR} for JSON files..."
+JSON_FILES=()
+while IFS= read -r -d '' file; do
+    JSON_FILES+=("$file")
+done < <(find "${JSON_DIR}" -maxdepth 1 -name "*.json" -type f -print0 | sort -z)
+
+# Check if any JSON files were found
+if [ ${#JSON_FILES[@]} -eq 0 ]; then
+    print_error "No JSON files found in ${JSON_DIR}"
+    print_info "Please add at least one JSON configuration file to the directory."
+    exit 1
+fi
+
+print_success "Found ${#JSON_FILES[@]} JSON file(s) in ${JSON_DIR}"
+
+echo ""
 print_info "Configuration:"
 echo "  - Executable: ${SIM_EXECUTABLE}"
+echo "  - JSON directory: ${JSON_DIR}"
 echo "  - Runs per config: ${NUM_RUNS}"
 echo "  - Output directory: ${OUTPUT_DIR}"
 echo "  - Total configs: ${#JSON_FILES[@]}"
+echo ""
+
+# List all configs to be processed
+print_info "Configs to process:"
+for json_file in "${JSON_FILES[@]}"; do
+    echo "  - $(basename ${json_file})"
+done
 echo ""
 
 # Check if rclone is available

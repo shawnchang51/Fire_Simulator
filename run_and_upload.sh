@@ -111,7 +111,7 @@ print_info "Scanning ${JSON_DIR} for JSON files..."
 JSON_FILES=()
 while IFS= read -r -d '' file; do
     JSON_FILES+=("$file")
-done < <(find "${JSON_DIR}" -maxdepth 1 -name "*.json" -type f -print0 | sort -z)
+done < <(find "${JSON_DIR}" -maxdepth 1 -name "*.json" -type f -print0 | sort -rz)
 
 # Check if any JSON files were found
 if [ ${#JSON_FILES[@]} -eq 0 ]; then

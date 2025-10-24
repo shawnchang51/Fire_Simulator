@@ -9,7 +9,7 @@ set -e  # Exit on any error
 # ============================================================
 
 # Simulation executable (Python script or compiled binary)
-SIM_EXECUTABLE="python monte_carlo.py"
+SIM_EXECUTABLE="python3 monte_carlo.py"
 
 # Directory containing JSON configuration files
 JSON_DIR="configs"
@@ -18,7 +18,7 @@ JSON_DIR="configs"
 OUTPUT_DIR="monte_carlo_results"
 
 # Number of simulation runs per configuration
-NUM_RUNS=100
+NUM_RUNS=2
 
 # Google Drive remote name (configured in rclone)
 GDRIVE_REMOTE="gdrive"

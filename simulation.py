@@ -1083,13 +1083,13 @@ class EvacuationSimulation():
                     print(f"Status: {status}")
 
         # Create data directory if it doesn't exist (safe for parallel execution)
-        data_dir = "./data"
-        os.makedirs(data_dir, exist_ok=True)
+        # data_dir = "./data"
+        # os.makedirs(data_dir, exist_ok=True)
 
         # Generate unique filename with microseconds to avoid conflicts in parallel execution
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        self.monitor.save_monitoring_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.json", silent=self.silent)
-        self.monitor.export_csv_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.csv", silent=self.silent)
+        # self.monitor.save_monitoring_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.json", silent=self.silent)
+        # self.monitor.export_csv_data(f"{data_dir}/evacuation_simulation_data_{timestamp}.csv", silent=self.silent)
 
         if visualizer:
             visualizer.close()

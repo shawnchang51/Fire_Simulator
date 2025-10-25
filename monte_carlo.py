@@ -24,6 +24,9 @@ Usage:
     # Parallel mode with specific number of processes and custom output directory
     python monte_carlo.py --runs 50 --parallel --processes 4 --output ./my_results
 
+    # Memory-efficient mode for large simulations (600+ agents)
+    python monte_carlo.py --runs 100 --parallel --no-full-results
+
 Output:
     Creates ./monte_carlo_results/{config_name}_{timestamp}/
         - full_results.json      (complete simulation data)
@@ -312,12 +315,12 @@ def _run_single_simulation(args):
     Worker function to run a single simulation (for parallel execution).
 
     Args:
-        args: Tuple of (config, run_number, total_runs)
+        args: Tuple of (config, run_number, total_runs, save_full_results)
 
     Returns:
         Dictionary with simulation results (or error result if failed)
     """
-    config, run_number, total_runs = args
+    config, run_number, total_runs, save_full_results = args
 
     try:
         # Create a deep copy to avoid shared state between processes
@@ -336,6 +339,28 @@ def _run_single_simulation(args):
             use_pygame=False,
             use_matlab=False
         )
+
+        # MEMORY OPTIMIZATION: If not saving full results, strip heavy data
+        if not save_full_results:
+            # Keep only essential statistics, remove trajectories and detailed history
+            minimal_result = {
+                'status': result.get('status', 'completed'),
+                'path_count': result.get('path_count', {}),
+                'steps': result.get('steps', 0),
+                'average_fire_damage': result.get('average_fire_damage', 0.0),
+                'average_peak_temp': result.get('average_peak_temp', 0.0),
+                'average_avg_temp': result.get('average_avg_temp', 0.0),
+                'evacuated_agents': result.get('evacuated_agents', 0),
+                'survived_agents': result.get('survived_agents', 0),
+                'run_number': run_number
+            }
+            # Explicitly delete the full result to free memory
+            del result
+            del sim
+            del config_copy
+            import gc
+            gc.collect()
+            return minimal_result
 
         return result
 
@@ -361,7 +386,7 @@ def _run_single_simulation(args):
         }
 
 
-def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_processes: int = None) -> tuple:
+def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_processes: int = None, save_full_results: bool = False) -> tuple:
     """
     Run multiple evacuation simulations in parallel using all available CPU cores.
 
@@ -369,6 +394,7 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
         config (SimulationConfig): Configuration for the simulation.
         num_runs (int): Number of simulation runs to perform.
         num_processes (int): Number of processes to use (default: all CPU cores).
+        save_full_results (bool): If False, only saves statistics (MUCH lower memory usage).
 
     Returns:
         Tuple of (results, statistics)
@@ -379,10 +405,12 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
 
     print(f"\n{'='*60}")
     print(f"Running {num_runs} simulations in parallel using {num_processes} CPU cores")
+    if not save_full_results:
+        print(f"Memory-efficient mode: Only saving statistics (not full trajectories)")
     print(f"{'='*60}\n")
 
     # Prepare arguments for each simulation run
-    sim_args = [(config, i, num_runs) for i in range(num_runs)]
+    sim_args = [(config, i, num_runs, save_full_results) for i in range(num_runs)]
 
     # Run simulations in parallel with progress bar
     with Pool(processes=num_processes) as pool:
@@ -460,7 +488,8 @@ def save_comprehensive_results(
     elapsed_time: float,
     num_runs: int,
     mode: str,
-    num_processes: int = None
+    num_processes: int = None,
+    save_full_results: bool = True
 ):
     """
     Save complete Monte Carlo results to multiple files for full traceability.
@@ -474,6 +503,7 @@ def save_comprehensive_results(
         num_runs: Number of runs performed
         mode: 'serial' or 'parallel'
         num_processes: Number of processes used (if parallel)
+        save_full_results: Whether to save full individual run data (memory intensive)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -487,25 +517,28 @@ def save_comprehensive_results(
         else:
             return obj
 
-    # 1. Save FULL results (every simulation run)
-    full_results_path = output_dir / "full_results.json"
-    full_data = {
-        "metadata": {
-            "timestamp": datetime.now().isoformat(),
-            "num_runs": num_runs,
-            "mode": mode,
-            "num_processes": num_processes,
-            "elapsed_time_seconds": elapsed_time,
-            "time_per_run_seconds": elapsed_time / num_runs if num_runs > 0 else 0,
-        },
-        "configuration": config.to_dict(),
-        "individual_runs": convert_dict_keys_to_strings(results),
-        "aggregated_statistics": convert_dict_keys_to_strings(statistics)
-    }
+    # 1. Save FULL results (every simulation run) - ONLY if requested
+    if save_full_results:
+        full_results_path = output_dir / "full_results.json"
+        full_data = {
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "num_runs": num_runs,
+                "mode": mode,
+                "num_processes": num_processes,
+                "elapsed_time_seconds": elapsed_time,
+                "time_per_run_seconds": elapsed_time / num_runs if num_runs > 0 else 0,
+            },
+            "configuration": config.to_dict(),
+            "individual_runs": convert_dict_keys_to_strings(results),
+            "aggregated_statistics": convert_dict_keys_to_strings(statistics)
+        }
 
-    with open(full_results_path, 'w', encoding='utf-8') as f:
-        json.dump(full_data, f, indent=2)
-    print(f"  ✓ Saved full results to: {full_results_path}")
+        with open(full_results_path, 'w', encoding='utf-8') as f:
+            json.dump(full_data, f, indent=2)
+        print(f"  ✓ Saved full results to: {full_results_path}")
+    else:
+        print(f"  ⊘ Skipped full_results.json (memory-efficient mode)")
 
     # 2. Save statistics only (smaller file)
     stats_path = output_dir / "statistics.json"
@@ -606,6 +639,9 @@ Examples:
   # Specify custom output directory:
   python monte_carlo.py --runs 50 --parallel --output ./my_results
 
+  # Memory-efficient mode for large simulations (600+ agents):
+  python monte_carlo.py --runs 100 --parallel --no-full-results
+
 Output:
   Creates ./monte_carlo_results/{config_name}_{timestamp}/
       - full_results.json      (complete simulation data)
@@ -644,6 +680,11 @@ Output:
         default="./monte_carlo_results",
         help="Base directory for output files (default: ./monte_carlo_results)"
     )
+    parser.add_argument(
+        "--no-full-results",
+        action="store_true",
+        help="Skip saving full individual run data (MUCH lower memory usage for large simulations)"
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -655,13 +696,15 @@ Output:
 
     # Run simulations
     start_time = time.time()
+    save_full_results = not args.no_full_results
 
     if args.parallel:
         print(f"Running in PARALLEL mode with {args.processes or cpu_count()} processes")
         results, statistics = run_monte_carlo_parallel(
             sim_config,
             num_runs=args.runs,
-            num_processes=args.processes
+            num_processes=args.processes,
+            save_full_results=save_full_results
         )
     else:
         print(f"Running in SERIAL mode")
@@ -689,7 +732,8 @@ Output:
         elapsed_time=elapsed_time,
         num_runs=args.runs,
         mode=mode,
-        num_processes=args.processes
+        num_processes=args.processes,
+        save_full_results=save_full_results
     )
 
     # Print brief summary to console

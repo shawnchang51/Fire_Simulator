@@ -722,7 +722,8 @@ class EvacuationSimulation():
             if not silent:
                 print(f"Using DEFAULT fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
 
-        self.monitor = FireMonitor(self.model)
+        # Use lightweight mode (no history accumulation) when running in silent mode (Monte Carlo)
+        self.monitor = FireMonitor(self.model, lightweight_mode=silent)
 
         try:
             self.shared_fire_map = config.initial_fire_map if hasattr(config, 'initial_fire_map') else [[0 for _ in range(config.map_cols)] for _ in range(config.map_rows)]

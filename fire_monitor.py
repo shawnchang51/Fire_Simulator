@@ -18,18 +18,28 @@ class FireMonitor:
     Provides real-time data collection and analysis.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, lightweight_mode=False):
         self.model = model
-        self.history = {
-            'steps': [],
-            'fire_states': [],
-            'oxygen_levels': [],
-            'temperatures': [],
-            'smoke_density': [],
-            'fuel_levels': [],
-            'statistics': [],
-            'changes_per_step': []
-        }
+        self.lightweight_mode = lightweight_mode
+
+        if not lightweight_mode:
+            self.history = {
+                'steps': [],
+                'fire_states': [],
+                'oxygen_levels': [],
+                'temperatures': [],
+                'smoke_density': [],
+                'fuel_levels': [],
+                'statistics': [],
+                'changes_per_step': []
+            }
+        else:
+            # In lightweight mode, only track minimal statistics
+            self.history = {
+                'steps': [],
+                'statistics': [],
+                'changes_per_step': []
+            }
         self.step_count = 0
 
     def monitor_step(self, fire_state: List[List[float]]) -> Dict[str, Any]:
@@ -47,41 +57,47 @@ class FireMonitor:
             y = int(pos.split('y')[1])
             fire_state[y][x] = new_val
 
-        # Collect environmental data snapshots
-        oxygen_snapshot = [row[:] for row in self.model.oxygen_map]
-        temp_snapshot = [row[:] for row in self.model.temperature_map]
-        smoke_snapshot = [row[:] for row in self.model.smoke_density]
-        fuel_snapshot = [row[:] for row in self.model.fuel_map]
-
         # Get comprehensive statistics
         stats = self.model.get_simulation_statistics()
 
-        # Store in history
+        # Store in history - CONDITIONAL on lightweight mode
         self.history['steps'].append(self.step_count)
-        self.history['fire_states'].append([row[:] for row in fire_state])
-        self.history['oxygen_levels'].append(oxygen_snapshot)
-        self.history['temperatures'].append(temp_snapshot)
-        self.history['smoke_density'].append(smoke_snapshot)
-        self.history['fuel_levels'].append(fuel_snapshot)
         self.history['statistics'].append(stats)
         self.history['changes_per_step'].append(len(changes))
+
+        # Only store environmental snapshots if NOT in lightweight mode
+        if not self.lightweight_mode:
+            # Collect environmental data snapshots (MEMORY INTENSIVE!)
+            oxygen_snapshot = [row[:] for row in self.model.oxygen_map]
+            temp_snapshot = [row[:] for row in self.model.temperature_map]
+            smoke_snapshot = [row[:] for row in self.model.smoke_density]
+            fuel_snapshot = [row[:] for row in self.model.fuel_map]
+
+            self.history['fire_states'].append([row[:] for row in fire_state])
+            self.history['oxygen_levels'].append(oxygen_snapshot)
+            self.history['temperatures'].append(temp_snapshot)
+            self.history['smoke_density'].append(smoke_snapshot)
+            self.history['fuel_levels'].append(fuel_snapshot)
 
         # Prepare detailed monitoring report
         monitoring_data = {
             'step': self.step_count,
             'changes': changes,
             'cells_changed': len(changes),
-            'environmental_snapshot': {
+            'statistics': stats,
+        }
+
+        # Only include detailed environmental data if NOT in lightweight mode
+        if not self.lightweight_mode:
+            monitoring_data['environmental_snapshot'] = {
                 'oxygen_map': oxygen_snapshot,
                 'temperature_map': temp_snapshot,
                 'smoke_density_map': smoke_snapshot,
                 'fuel_map': fuel_snapshot,
                 'burn_time_map': [row[:] for row in self.model.burn_time]
-            },
-            'statistics': stats,
-            'fire_analysis': self._analyze_fire_state(fire_state),
-            'environmental_analysis': self._analyze_environment()
-        }
+            }
+            monitoring_data['fire_analysis'] = self._analyze_fire_state(fire_state)
+            monitoring_data['environmental_analysis'] = self._analyze_environment()
 
         self.step_count += 1
         return monitoring_data

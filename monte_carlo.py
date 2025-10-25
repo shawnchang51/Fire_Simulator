@@ -60,7 +60,7 @@ except ImportError:
     TQDM_AVAILABLE = False
     print("Note: Install tqdm for progress bars: pip install tqdm")
 
-def replace_fire(config: SimulationConfig, num_fires: int=None) -> SimulationConfig:
+def replace_fire(config: SimulationConfig, num_fires: int=30) -> SimulationConfig:
     """
     Replace fire positions with random valid locations.
     Fire can't be placed on doors, exits, or obstacles.

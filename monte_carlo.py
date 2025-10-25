@@ -41,6 +41,7 @@ Functions:
 
 from simulation import EvacuationSimulation, SimulationConfig
 from d_star_lite.utils import coordsToStateName, stateNameToCoords
+from distribution_analysis import compute_distributions, compute_per_run_distributions, print_distribution_summary
 import argparse, json, os
 import random
 from collections import Counter
@@ -262,6 +263,9 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int) -> list:
     evacuated_agents = 0
     survived_agents = 0
 
+    # Collect all agent records for distribution analysis
+    all_agent_records = []
+
     # Use tqdm progress bar if available
     iterator = tqdm(range(num_runs), desc="Running simulations", unit="run") if TQDM_AVAILABLE else range(num_runs)
 
@@ -276,6 +280,11 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int) -> list:
         result = sim.run(500, show_visualization=False, use_pygame=False, use_matlab=False)
 
         results.append(result)
+
+        # Collect agent records from this run
+        if 'agent_records' in result:
+            all_agent_records.extend(result['agent_records'])
+
         path_count = dict(Counter(path_count) + Counter(result['path_count']))
         average_steps = (average_steps * i + result['steps']) / (i + 1)
         average_fire_damage = (average_fire_damage * i + result['average_fire_damage']) / (i + 1)
@@ -304,6 +313,19 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int) -> list:
     statistics['average_avg_temp'] = average_avg_temp
     statistics['evacuated_agents'] = evacuated_agents
     statistics['survived_agents'] = survived_agents
+
+    # Compute per-agent distributions across all runs
+    print("\nComputing per-agent distributions...")
+    agent_distributions = compute_distributions(all_agent_records, num_bins=30, include_raw_values=False)
+    statistics['agent_distributions'] = agent_distributions
+
+    # Compute per-run distributions (distributions of run-level averages)
+    print("Computing per-run distributions...")
+    run_distributions = compute_per_run_distributions(results, num_bins=20)
+    statistics['run_distributions'] = run_distributions
+
+    # Print summary
+    print_distribution_summary(agent_distributions)
 
     return results, statistics
 
@@ -413,11 +435,18 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
     survived_agents = 0
     error_count = 0
 
+    # Collect all agent records for distribution analysis
+    all_agent_records = []
+
     for i, result in enumerate(results):
         # Skip error results in averaging but count them
         if result.get('status') == 'error':
             error_count += 1
             continue
+
+        # Collect agent records from this run
+        if 'agent_records' in result:
+            all_agent_records.extend(result['agent_records'])
 
         path_count = dict(Counter(path_count) + Counter(result['path_count']))
         # Only count successful runs in averaging
@@ -448,6 +477,21 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
     if error_count > 0:
         print(f"⚠️  Warning: {error_count}/{num_runs} simulations failed with errors")
     print(f"Overall Success Rate: {success_rate:.1f}% ({evacuated_agents}/{total_agents} agents evacuated)")
+
+    # Compute per-agent distributions across all runs
+    print("\nComputing per-agent distributions...")
+    agent_distributions = compute_distributions(all_agent_records, num_bins=30, include_raw_values=False)
+    statistics['agent_distributions'] = agent_distributions
+
+    # Compute per-run distributions (distributions of run-level averages)
+    print("Computing per-run distributions...")
+    # Filter out error results for run-level distributions
+    successful_results = [r for r in results if r.get('status') != 'error']
+    run_distributions = compute_per_run_distributions(successful_results, num_bins=20)
+    statistics['run_distributions'] = run_distributions
+
+    # Print summary
+    print_distribution_summary(agent_distributions)
 
     return results, statistics
 
@@ -574,7 +618,37 @@ PATH STATISTICS
         for path, count in sorted_paths[:10]:  # Top 10 paths
             summary_text += f"  {path}: {count} times\n"
 
+    # Add distribution summary
+    summary_text += "\nPER-AGENT DISTRIBUTION SUMMARY\n"
+    summary_text += "------------------------------\n"
+
+    if statistics.get('agent_distributions'):
+        agent_dist = statistics['agent_distributions']
+
+        if '_summary' in agent_dist:
+            summary_text += f"Total Agents Analyzed: {agent_dist['_summary'].get('total_agents', 'N/A')}\n"
+            summary_text += f"Overall Survival Rate: {agent_dist['_summary'].get('survival_rate', 0) * 100:.2f}%\n\n"
+
+            if 'status_counts' in agent_dist['_summary']:
+                summary_text += "Agent Status Distribution:\n"
+                for status, count in agent_dist['_summary']['status_counts'].items():
+                    summary_text += f"  {status}: {count}\n"
+
+        # Add metrics summary
+        summary_text += "\nKey Metrics (Per-Agent):\n"
+        for metric in ['steps', 'fire_damage', 'peak_temp', 'average_temp']:
+            if metric in agent_dist and 'statistics' in agent_dist[metric]:
+                stats = agent_dist[metric]['statistics']
+                percentiles = agent_dist[metric].get('percentiles', {})
+                summary_text += f"\n{metric.upper()}:\n"
+                summary_text += f"  Mean: {stats.get('mean', 'N/A'):.2f}\n"
+                summary_text += f"  Std Dev: {stats.get('std_dev', 'N/A'):.2f}\n"
+                summary_text += f"  Range: [{stats.get('min', 'N/A'):.2f}, {stats.get('max', 'N/A'):.2f}]\n"
+                summary_text += f"  Median (50th): {percentiles.get('p50', 'N/A'):.2f}\n"
+
     summary_text += f"\n{'='*80}\n"
+    summary_text += "\nNOTE: Full distribution data (histograms, percentiles) saved in statistics.json\n"
+    summary_text += f"{'='*80}\n"
 
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write(summary_text)

@@ -702,6 +702,9 @@ class EvacuationSimulation():
         self.average_avg_temp = 0.0
         self.survived_agents = 0
 
+        # Track individual agent data for distribution analysis
+        self.agent_records = []  # List of dicts with per-agent metrics
+
         # Initialize fire model based on selected type
         if config.fire_model_type == "realistic":
             from fire_model_realistic import create_fire_model
@@ -823,6 +826,20 @@ class EvacuationSimulation():
                     if survived:
                         self.survived_agents += 1
                     self.path_count[tuple(agent.door_path)] = self.path_count.get(tuple(agent.door_path), 0) + 1
+
+                    # Record individual agent data BEFORE removal
+                    agent_record = {
+                        'agent_id': agent.id,
+                        'status': 'evacuated',
+                        'steps': self.steps,
+                        'fire_damage': agent.fire_damage,
+                        'peak_temp': agent.peak_temp,
+                        'average_temp': agent.average_temp,
+                        'door_path': list(agent.door_path) if agent.door_path else [],
+                        'survived': survived
+                    }
+                    self.agent_records.append(agent_record)
+
                     # Update average fire damage and temperatures
                     if len(self.evacuated_agents) == 1:
                         self.average_fire_damage = agent.fire_damage
@@ -842,6 +859,20 @@ class EvacuationSimulation():
                 elif result == 'stuck':
                     if not self.silent:
                         print(f"Agent {agent.id} is stuck at {agent.s_current}.")
+
+                    # Record stuck agent data BEFORE removal
+                    agent_record = {
+                        'agent_id': agent.id,
+                        'status': 'stuck',
+                        'steps': self.steps,
+                        'fire_damage': agent.fire_damage,
+                        'peak_temp': agent.peak_temp,
+                        'average_temp': agent.average_temp,
+                        'door_path': list(agent.door_path) if agent.door_path else [],
+                        'survived': False  # Stuck agents didn't survive
+                    }
+                    self.agent_records.append(agent_record)
+
                     self.agents.remove(agent)
                 elif result is not None:
                     if not self.silent:
@@ -1021,6 +1052,21 @@ class EvacuationSimulation():
             elif self.steps >= max_steps:
                 if not self.silent:
                     print("Maximum steps reached. Ending simulation.")
+
+                # Record remaining agents as "max_steps_reached"
+                for agent in self.agents:
+                    agent_record = {
+                        'agent_id': agent.id,
+                        'status': 'max_steps_reached',
+                        'steps': self.steps,
+                        'fire_damage': agent.fire_damage,
+                        'peak_temp': agent.peak_temp,
+                        'average_temp': agent.average_temp,
+                        'door_path': list(agent.door_path) if agent.door_path else [],
+                        'survived': False  # Didn't complete evacuation
+                    }
+                    self.agent_records.append(agent_record)
+
                 break
 
             results = self.step()
@@ -1101,7 +1147,8 @@ class EvacuationSimulation():
         self.simulation_results['average_avg_temp'] = self.average_avg_temp
         self.simulation_results['evacuated_agents'] = len(self.evacuated_agents)
         self.simulation_results['survived_agents'] = self.survived_agents
-        
+        self.simulation_results['agent_records'] = self.agent_records  # Add individual agent data
+
         return self.simulation_results
 
 if __name__ == "__main__":

@@ -18,13 +18,16 @@ A Python-based evacuation simulation system that models agent pathfinding and fi
 ## Features
 
 - **Dynamic Pathfinding**: Agents use D* Lite algorithm to navigate around obstacles and fire
-- **Fire Spread Simulation**: Real-time fire propagation with environmental monitoring
+- **Hierarchical Navigation**: Optional door graph system for strategic multi-room pathfinding
+- **Fire Spread Simulation**: Three fire models (realistic, aggressive, default) with environmental monitoring
+- **Agent Knowledge Sharing**: Cooperative pathfinding through proximity-based information exchange
 - **Monte Carlo Simulations**: Parallel execution for statistical analysis (8-10x speedup)
 - **Multiple Visualization Modes**:
   - Pygame graphical interface (recommended)
+  - MATLAB-style environmental visualization with interpolation
   - Text-based console output
-- **Multi-Agent System**: Supports multiple agents with individual targets and viewing ranges
-- **Configurable Environments**: JSON-based configuration for map layout, obstacles, and initial fire positions
+- **Multi-Agent System**: Supports multiple agents with individual targets, viewing ranges, and fear factors
+- **Configurable Environments**: JSON-based configuration for map layout, obstacles, fire positions, and behavior parameters
 
 ## Requirements
 
@@ -32,6 +35,9 @@ A Python-based evacuation simulation system that models agent pathfinding and fi
 - numpy
 - matplotlib
 - pygame (optional, for graphical visualization)
+- scipy (optional, for MATLAB-style visualization)
+- pandas (optional, for data analysis)
+- tqdm (optional, for progress bars in Monte Carlo simulations)
 
 ## Installation
 
@@ -42,9 +48,16 @@ A Python-based evacuation simulation system that models agent pathfinding and fi
 pip install -r requirements.txt
 ```
 
-3. (Optional) For graphical visualization, ensure pygame is installed:
+3. (Optional) For advanced features:
 ```bash
+# Graphical visualization
 pip install pygame
+
+# MATLAB-style environmental visualization
+pip install scipy
+
+# Monte Carlo progress bars
+pip install tqdm
 ```
 
 ## Quick Start
@@ -70,9 +83,11 @@ python simulation.py
 
 This will:
 - Load configuration from [example_configuration.json](example_configuration.json)
-- Initialize 5 agents with predefined start positions and targets
+- Initialize agents with predefined start positions and targets
+- Use realistic fire model (3-6 min to flashover, 0.1-0.2 m/s spread)
 - Launch pygame visualization (if available)
 - Simulate fire spread and agent evacuation
+- Export results to `./data/` directory
 
 ## Monte Carlo Simulations (Parallel Execution)
 
@@ -112,6 +127,8 @@ python monte_carlo.py [OPTIONS]
 | `--seed` | int | 42 | Random seed for reproducibility |
 | `--parallel` | flag | False | Enable parallel execution |
 | `--processes` | int | All cores | Number of parallel processes |
+| `--output` | string | `./monte_carlo_results` | Output directory for results |
+| `--no-full-results` | flag | False | Save only statistics (memory-efficient for 600+ agents) |
 
 ### Usage Examples
 
@@ -130,6 +147,12 @@ python monte_carlo.py --runs 200 --parallel --processes 8
 
 # Reproducible results with fixed seed
 python monte_carlo.py --runs 100 --parallel --seed 12345
+
+# Memory-efficient mode for large simulations
+python monte_carlo.py --runs 100 --parallel --no-full-results
+
+# Custom output directory
+python monte_carlo.py --runs 100 --parallel --output ./my_results
 ```
 
 ### Performance
@@ -220,11 +243,13 @@ df = pd.DataFrame(results)
 df.to_csv('monte_carlo_results.csv', index=False)
 ```
 
-### Documentation
+### Output Files
 
-For detailed information, see:
-- [MONTE_CARLO_README.md](MONTE_CARLO_README.md) - Complete guide
-- [PARALLEL_USAGE.txt](PARALLEL_USAGE.txt) - Quick reference
+Results are saved to `./monte_carlo_results/{config_name}_{timestamp}/`:
+- `full_results.json`: Complete simulation data (optional, can be disabled with `--no-full-results`)
+- `summary.txt`: Human-readable summary with statistics
+- `statistics.json`: Aggregated metrics (averages, percentiles, distributions)
+- `config_used.json`: Configuration snapshot for reproducibility
 
 ## Configuration
 
@@ -232,29 +257,56 @@ Create a JSON configuration file with the following structure:
 
 ```json
 {
-  "map_rows": 20,
-  "map_cols": 20,
+  "map_rows": 60,
+  "map_cols": 60,
   "max_occupancy": 2,
   "agent_num": 5,
-  "viewing_range": 3,
+  "viewing_range": 5,
+  "cell_size": 0.3,
+  "timestep_duration": 0.5,
+  "fire_update_interval": 4,
+  "fire_model_type": "realistic",
   "start_positions": ["x12y9", "x7y11", "x6y8", "x12y14", "x13y3"],
-  "targets": ["x17y2", "x17y17", "x2y17", "x2y2"],
-  "initial_fire_map": [[...]]
+  "targets": ["x17y2", "x17y17"],
+  "initial_fire_map": [[...]],
+  "door_configs": [
+    {"id": "d1", "position": "x15y3", "type": "door"},
+    {"id": "e1", "position": "x50y35", "type": "exit"}
+  ],
+  "agent_fearness": [1.0, 1.2, 0.8, 1.0, 1.5],
+  "consider_env_factors": false,
+  "wall_preference": 0.0,
+  "communication_range": 15.0,
+  "sharing_interval": 5
 }
 ```
 
 ### Configuration Parameters
 
+**Required:**
 - `map_rows`, `map_cols`: Grid dimensions
-- `max_occupancy`: Maximum agents per cell
 - `agent_num`: Number of evacuation agents
-- `viewing_range`: Agent's obstacle detection range
 - `start_positions`: Agent starting coordinates (format: "x{col}y{row}")
 - `targets`: Evacuation target waypoints (agents visit in order)
 - `initial_fire_map`: 2D array where:
   - `0` = passable cell
   - `-2` = obstacle/wall
   - `0.0-1.0` = fire intensity
+
+**Optional (with defaults):**
+- `max_occupancy`: Maximum agents per cell (default: 2)
+- `viewing_range`: Agent's obstacle detection radius (default: 5, auto-scaled based on cell_size)
+- `cell_size`: Physical size of each cell in meters (default: 0.3)
+- `timestep_duration`: Duration of each timestep in seconds (default: 0.5)
+- `fire_update_interval`: Update fire every N timesteps (default: 4)
+- `fire_model_type`: Fire model - "realistic", "aggressive", or "default" (default: "realistic")
+- `agent_fearness`: Per-agent fear multipliers or single value for all (default: 1.0)
+- `door_configs`: Door/exit configurations for hierarchical pathfinding (default: [])
+- `consider_env_factors`: Use temperature/smoke in pathfinding costs (default: false)
+- `wall_preference`: Wall-following preference (0=none, higher=stronger) (default: 0.0)
+- `communication_range`: Distance for agent knowledge sharing in cells (default: 15.0)
+- `sharing_interval`: Share knowledge every N timesteps (default: 5)
+- `sector_size`: Spatial index sector size (default: auto-calculated)
 
 ## Usage Examples
 
@@ -298,6 +350,7 @@ sim.run(max_steps=1000, show_visualization=True, use_pygame=True)
 - `max_steps`: Maximum simulation steps (default: 1000)
 - `show_visualization`: Enable text-based visualization (default: True)
 - `use_pygame`: Use pygame graphical interface (default: True)
+- `use_matlab`: Use MATLAB-style environmental visualization (default: False)
 
 ## Visualization
 
@@ -306,27 +359,110 @@ sim.run(max_steps=1000, show_visualization=True, use_pygame=True)
 - **Red squares**: Targets
 - **Gray squares**: Obstacles
 - **Red/orange gradient**: Fire intensity
+- **Blue circles**: Doors (if door_configs enabled)
 - Close window or press ESC to quit
+
+### MATLAB-Style Environmental Visualization
+Requires scipy. Enable with `use_matlab=True`:
+- **Temperature map**: Hot colormap with cubic interpolation
+- **Oxygen levels**: Blues_r colormap
+- **Smoke density**: Grayscale
+- **Fuel remaining**: Greens colormap
+- **Fire intensity**: YlOrRd colormap
+- **Agent trajectories**: Last 10 positions per agent with anti-overlap offsets
+- **Interactive checkboxes**: Toggle layers in real-time
 
 ### Text-based (Console)
 - `A#`: Agent with ID number
 - `T#`: Target waypoint
 - `.`: Empty cell
+- `#`: Obstacle
+- `F`: Fire
 
 ## Algorithm Details
 
-The simulation uses **D* Lite** for dynamic pathfinding, which:
+### Pathfinding
+The simulation uses **D* Lite** for dynamic pathfinding:
 - Efficiently recalculates paths when environment changes
 - Handles moving obstacles and fire spread
 - Supports partial observability (agents have limited viewing range)
+- 8-connectivity with diagonal movement cost of √2
+
+### Hierarchical Navigation (Optional)
+When `door_configs` is provided:
+- **High-level planning**: Door graph using Dijkstra to plan route through doors/exits
+- **Low-level navigation**: D* Lite for tactical movement between doors
+- **Lazy updates**: Edge weights updated when agents enter rooms
+- **Per-agent knowledge**: Each agent maintains independent door graph copy
+
+### Fire Models
+Three available models via `fire_model_type`:
+- **Realistic** (default): 3-6 min to flashover, 0.1-0.2 m/s spread, suitable for accurate evacuation planning
+- **Aggressive**: 30-60 sec to flashover, 0.3-0.5 m/s spread, for stress-testing algorithms
+- **Default**: Original model from fire_model_float.py
+
+Fire propagation considers:
+- Neighboring fire intensity (distance-weighted)
+- Wind direction and speed
+- Oxygen availability (fire struggles below 16% O2)
+- Fuel density and moisture
+- Temperature preheating
+- Smoke density
+
+### Knowledge Sharing
+When `communication_range` > 0:
+- Agents share door graph knowledge with nearby agents
+- Spatial indexing enables O(n) proximity queries instead of O(n²)
+- Sharing occurs every `sharing_interval` timesteps
+- Enables cooperative pathfinding through information exchange
 
 ## Troubleshooting
 
 **Pygame not found**: Install with `pip install pygame` or run with text visualization
 
-**Agent stuck**: Occurs when no valid path exists; check obstacle configuration
+**Scipy not found for MATLAB visualization**: Install with `pip install scipy`
+
+**Agent stuck**: Occurs when no valid path exists; check obstacle configuration and viewing range
 
 **Import errors**: Ensure all dependencies are installed: `pip install -r requirements.txt`
+
+**Slow Monte Carlo simulations**: Always use `--parallel` flag for runs > 10
+
+**Memory issues with large simulations**: Use `--no-full-results` flag to save only statistics
+
+**Fire spreads too fast/slow**: Adjust `fire_model_type` or `fire_update_interval` in configuration
+
+## Project Structure
+
+```
+Fire_Simulator/
+├── simulation.py              # Main simulation engine
+├── monte_carlo.py             # Monte Carlo simulations with parallel execution
+├── distribution_analysis.py   # Statistical analysis for Monte Carlo results
+├── visual_configurator.py     # Interactive map design tool
+├── fire_model_realistic.py    # Realistic fire model (default)
+├── fire_model_aggressive.py   # Aggressive fire model for stress-testing
+├── fire_model_float.py        # Original fire model
+├── fire_monitor.py            # Fire monitoring and data export
+├── door_graph.py              # Hierarchical pathfinding system
+├── spatial_index.py           # Spatial indexing for agent proximity
+├── pygame_visualizer.py       # Pygame graphical visualization
+├── matlab_visualizer.py       # MATLAB-style environmental visualization
+├── d_star_lite/               # D* Lite pathfinding algorithm
+│   ├── d_star_lite.py        # Core algorithm
+│   ├── grid.py               # GridWorld graph
+│   ├── graph.py              # Base graph structure
+│   └── utils.py              # Utilities
+├── example_configuration.json # Example configuration file
+└── requirements.txt           # Python dependencies
+```
+
+## Additional Resources
+
+- **[CLAUDE.md](CLAUDE.md)**: Comprehensive developer guide with architecture details
+- **Example Configuration**: See [example_configuration.json](example_configuration.json) for a complete configuration
+- **Data Output**: Simulation results automatically saved to `./data/` directory
+- **Monte Carlo Results**: Parallel simulation results in `./monte_carlo_results/`
 
 ## License
 

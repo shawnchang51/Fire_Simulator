@@ -67,6 +67,10 @@ class VisualConfigurator:
             'fire_model_type': tk.StringVar(value='realistic'),
             'viewing_range': tk.IntVar(value=10),
             'agent_fearness_bulk': tk.DoubleVar(value=1.0),
+            'consider_env_factors': tk.BooleanVar(value=False),
+            'wall_preference': tk.DoubleVar(value=0.0),
+            'communication_range': tk.DoubleVar(value=15.0),
+            'sharing_interval': tk.IntVar(value=5),
         }
         self.agent_fearness_values = []  # Per-agent fearness values
 
@@ -354,6 +358,51 @@ class VisualConfigurator:
             width=13
         )
         fire_model_combo.grid(row=row, column=1, pady=5)
+        row += 1
+
+        # Consider environmental factors
+        tk.Label(container, text="Consider Env Factors:", bg=COLORS['panel_bg']).grid(row=row, column=0, sticky='w', pady=5)
+        tk.Checkbutton(
+            container,
+            variable=self.config_params['consider_env_factors'],
+            bg=COLORS['panel_bg']
+        ).grid(row=row, column=1, sticky='w', pady=5)
+        row += 1
+
+        # Wall preference
+        tk.Label(container, text="Wall Preference:", bg=COLORS['panel_bg']).grid(row=row, column=0, sticky='w', pady=5)
+        tk.Spinbox(
+            container,
+            from_=0.0,
+            to=10.0,
+            increment=0.1,
+            textvariable=self.config_params['wall_preference'],
+            width=15
+        ).grid(row=row, column=1, pady=5)
+        row += 1
+
+        # Communication range
+        tk.Label(container, text="Communication Range:", bg=COLORS['panel_bg']).grid(row=row, column=0, sticky='w', pady=5)
+        tk.Spinbox(
+            container,
+            from_=0.0,
+            to=100.0,
+            increment=1.0,
+            textvariable=self.config_params['communication_range'],
+            width=15
+        ).grid(row=row, column=1, pady=5)
+        row += 1
+
+        # Sharing interval
+        tk.Label(container, text="Sharing Interval:", bg=COLORS['panel_bg']).grid(row=row, column=0, sticky='w', pady=5)
+        tk.Spinbox(
+            container,
+            from_=1,
+            to=100,
+            increment=1,
+            textvariable=self.config_params['sharing_interval'],
+            width=15
+        ).grid(row=row, column=1, pady=5)
         row += 1
 
     def create_agent_settings(self, parent):
@@ -1318,6 +1367,10 @@ class VisualConfigurator:
             self.config_params['max_occupancy'].set(config.get('max_occupancy', 1))
             self.config_params['fire_model_type'].set(config.get('fire_model_type', 'realistic'))
             self.config_params['viewing_range'].set(config.get('viewing_range', 10))
+            self.config_params['consider_env_factors'].set(config.get('consider_env_factors', False))
+            self.config_params['wall_preference'].set(config.get('wall_preference', 0.0))
+            self.config_params['communication_range'].set(config.get('communication_range', 15.0))
+            self.config_params['sharing_interval'].set(config.get('sharing_interval', 5))
 
             # Load agent fearness
             self.agent_fearness_values = config.get('agent_fearness', [])
@@ -1365,6 +1418,10 @@ class VisualConfigurator:
                 "timestep_duration": self.config_params['timestep_duration'].get(),
                 "fire_update_interval": self.config_params['fire_update_interval'].get(),
                 "fire_model_type": self.config_params['fire_model_type'].get(),
+                "consider_env_factors": self.config_params['consider_env_factors'].get(),
+                "wall_preference": self.config_params['wall_preference'].get(),
+                "communication_range": self.config_params['communication_range'].get(),
+                "sharing_interval": self.config_params['sharing_interval'].get(),
                 "start_positions": [self.format_position(col, row) for col, row in self.agent_starts],
                 "door_configs": self.doors + self.exits,
                 "initial_fire_map": self.grid_data,

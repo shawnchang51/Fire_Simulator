@@ -155,7 +155,37 @@ PATH STATISTICS
         for path, count in sorted_paths[:10]:  # Top 10 paths
             summary_text += f"  {path}: {count} times\n"
 
+    # Add distribution summary
+    summary_text += "\nPER-AGENT DISTRIBUTION SUMMARY\n"
+    summary_text += "------------------------------\n"
+
+    if statistics.get('agent_distributions'):
+        agent_dist = statistics['agent_distributions']
+
+        if '_summary' in agent_dist:
+            summary_text += f"Total Agents Analyzed: {agent_dist['_summary'].get('total_agents', 'N/A')}\n"
+            summary_text += f"Overall Survival Rate: {agent_dist['_summary'].get('survival_rate', 0) * 100:.2f}%\n\n"
+
+            if 'status_counts' in agent_dist['_summary']:
+                summary_text += "Agent Status Distribution:\n"
+                for status, count in agent_dist['_summary']['status_counts'].items():
+                    summary_text += f"  {status}: {count}\n"
+
+        # Add metrics summary
+        summary_text += "\nKey Metrics (Per-Agent):\n"
+        for metric in ['steps', 'fire_damage', 'peak_temp', 'average_temp']:
+            if metric in agent_dist and 'statistics' in agent_dist[metric]:
+                stats = agent_dist[metric]['statistics']
+                percentiles = agent_dist[metric].get('percentiles', {})
+                summary_text += f"\n{metric.upper()}:\n"
+                summary_text += f"  Mean: {stats.get('mean', 'N/A'):.2f}\n"
+                summary_text += f"  Std Dev: {stats.get('std_dev', 'N/A'):.2f}\n"
+                summary_text += f"  Range: [{stats.get('min', 'N/A'):.2f}, {stats.get('max', 'N/A'):.2f}]\n"
+                summary_text += f"  Median (50th): {percentiles.get('p50', 'N/A'):.2f}\n"
+
     summary_text += f"\n{'='*80}\n"
+    summary_text += "\nNOTE: Full distribution data (histograms, percentiles) saved in statistics.json\n"
+    summary_text += f"{'='*80}\n"
 
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write(summary_text)
@@ -221,15 +251,13 @@ def process_config_file(
             results, statistics = run_monte_carlo_parallel(
                 config,
                 num_runs=num_runs,
-                random_seed=random_seed,
                 num_processes=num_processes
             )
             mode = 'parallel'
         else:
             results, statistics = run_monte_carlo_simulation(
                 config,
-                num_runs=num_runs,
-                random_seed=random_seed
+                num_runs=num_runs
             )
             mode = 'serial'
     except Exception as e:

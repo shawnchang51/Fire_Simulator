@@ -1,0 +1,91 @@
+
+================================================================================
+MONTE CARLO SIMULATION SUMMARY
+================================================================================
+
+Timestamp: 2025-10-25 12:24:55
+
+CONFIGURATION
+-------------
+Config File: config_used.json
+Map Size: 60 x 60
+Cell Size: 0.3m
+Timestep Duration: 0.5s
+Fire Update Interval: 2 timesteps
+Fire Model Type: aggressive
+Agents per Simulation: 200
+Viewing Range: 10 cells
+Max Occupancy: 1
+Number of Doors: 11
+
+EXECUTION
+---------
+Number of Runs: 2
+Execution Mode: PARALLEL
+Processes Used: N/A
+Total Time: 113.61 seconds (1.89 minutes)
+Time per Run: 56.81 seconds
+
+RESULTS
+-------
+Total Agents: 400
+Evacuated Agents: 400
+Success Rate: 100.00%
+
+Average Steps: 74.50
+Average Fire Damage: 0.0125
+Average Peak Temperature: 20.14°C
+Average Temperature: 20.01°C
+
+PATH STATISTICS
+---------------
+Most Common Paths:
+  ('x86y40', 'x95y33'): 138 times
+  ('x28y40', 'x23y36', 'x15y36', 'x4y33'): 56 times
+  ('x89y22', 'x95y33'): 43 times
+  ('x10y21', 'x4y33'): 38 times
+  ('x95y33',): 24 times
+  ('x28y6', 'x15y21', 'x15y36', 'x4y33'): 22 times
+  ('x15y21', 'x15y36', 'x4y33'): 21 times
+  ('x4y33',): 17 times
+  ('x15y36', 'x4y33'): 14 times
+  ('x67y6', 'x89y22', 'x95y33'): 14 times
+
+PER-AGENT DISTRIBUTION SUMMARY
+------------------------------
+Total Agents Analyzed: 400
+Overall Survival Rate: 100.00%
+
+Agent Status Distribution:
+  evacuated: 400
+
+Key Metrics (Per-Agent):
+
+STEPS:
+  Mean: 36.56
+  Std Dev: 18.00
+  Range: [1.00, 75.00]
+  Median (50th): 36.00
+
+FIRE_DAMAGE:
+  Mean: 0.01
+  Std Dev: 0.11
+  Range: [0.00, 1.00]
+  Median (50th): 0.00
+
+PEAK_TEMP:
+  Mean: 20.14
+  Std Dev: 0.80
+  Range: [20.00, 28.11]
+  Median (50th): 20.00
+
+AVERAGE_TEMP:
+  Mean: 20.01
+  Std Dev: 0.06
+  Range: [20.00, 20.57]
+  Median (50th): 20.00
+
+================================================================================
+
+NOTE: Full distribution data (histograms, percentiles) saved in statistics.json
+================================================================================

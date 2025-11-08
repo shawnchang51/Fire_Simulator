@@ -9,3 +9,10 @@ CLAUDE.md
 *.json
 !example_configuration.json
 !configs/*
+
+# Cython build artifacts
+*.c
+*.so
+*.pyd
+build/
+*.html

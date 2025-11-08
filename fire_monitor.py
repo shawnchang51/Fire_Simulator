@@ -18,9 +18,19 @@ class FireMonitor:
     Provides real-time data collection and analysis.
     """
 
-    def __init__(self, model, lightweight_mode=False):
+    def __init__(self, model, lightweight_mode=False, max_history_steps=500):
+        """Initialize fire monitor with optional history limit.
+
+        Args:
+            model: Fire model instance to monitor
+            lightweight_mode: If True, only track statistics (no environmental snapshots)
+            max_history_steps: Maximum number of timesteps to keep in history.
+                             Set to None for unlimited history (not recommended for long simulations).
+                             Default 500 keeps ~4-5 minutes of history at 0.5s timesteps.
+        """
         self.model = model
         self.lightweight_mode = lightweight_mode
+        self.max_history_steps = max_history_steps
 
         if not lightweight_mode:
             self.history = {
@@ -59,6 +69,20 @@ class FireMonitor:
 
         # Get comprehensive statistics
         stats = self.model.get_simulation_statistics()
+
+        # Enforce history limit by removing oldest entries if needed
+        if self.max_history_steps is not None and len(self.history['steps']) >= self.max_history_steps:
+            # Remove oldest entry from each history list
+            self.history['steps'].pop(0)
+            self.history['statistics'].pop(0)
+            self.history['changes_per_step'].pop(0)
+
+            if not self.lightweight_mode:
+                self.history['fire_states'].pop(0)
+                self.history['oxygen_levels'].pop(0)
+                self.history['temperatures'].pop(0)
+                self.history['smoke_density'].pop(0)
+                self.history['fuel_levels'].pop(0)
 
         # Store in history - CONDITIONAL on lightweight mode
         self.history['steps'].append(self.step_count)

@@ -942,16 +942,49 @@ class EvacuationSimulation():
         print()
     
     def update_environment(self, changes):
+        """Update agent graphs with fire changes using spatial filtering for performance.
+
+        Only updates agents that are within viewing distance of the changes,
+        which dramatically improves performance for large agent counts.
+        """
+        if not changes:
+            return
+
+        # Update shared fire map
         for (coord, value) in changes.items():
             x, y = stateNameToCoords(coord)
             if 0 <= x < self.map_cols and 0 <= y < self.map_rows:
                 self.shared_fire_map[y][x] = value
             else:
                 print(f"Warning: Received out-of-bounds environment update for {coord} ({x},{y})")
-        
+
+        # Spatial filtering: Only update agents near the changes
+        # Get bounding box of all changes
+        change_coords = [stateNameToCoords(pos) for pos in changes.keys()]
+        min_x = min(c[0] for c in change_coords)
+        max_x = max(c[0] for c in change_coords)
+        min_y = min(c[1] for c in change_coords)
+        max_y = max(c[1] for c in change_coords)
+
+        # Buffer distance: viewing_range + communication_range to be conservative
+        # Use max from config, or default to 25 if agents have varying ranges
+        max_viewing_range = max((getattr(agent, 'viewing_range', 10) for agent in self.agents), default=10)
+        max_comm_range = max((getattr(agent, 'communication_range', 15) for agent in self.agents), default=15)
+        buffer = max_viewing_range + max_comm_range
+
+        # Only update agents within or near the change region
         for agent in self.agents:
             try:
-                agent.update_graph(changes)
+                # Skip agents without a current position (shouldn't happen, but be safe)
+                if not hasattr(agent, 'current_position') or agent.current_position is None:
+                    continue
+
+                agent_x, agent_y = stateNameToCoords(agent.current_position)
+
+                # Check if agent is within buffer distance of changes
+                if (min_x - buffer <= agent_x <= max_x + buffer and
+                    min_y - buffer <= agent_y <= max_y + buffer):
+                    agent.update_graph(changes)
             except Exception as e:
                 print(f"Warning: Agent {agent.id} failed to update graph: {e}")
 

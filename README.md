@@ -432,29 +432,82 @@ When `communication_range` > 0:
 
 **Fire spreads too fast/slow**: Adjust `fire_model_type` or `fire_update_interval` in configuration
 
+## Performance Optimizations
+
+🚀 **NEW: Optimized implementations available!**
+
+We've created optimized versions of the core components with **dramatic performance improvements**:
+
+- **Fire Model: 21.72x faster** (95.4% time reduction)
+- **Memory Usage: 73.9% reduction** for fire calculations
+- **D* Lite Grid: 1.47x faster** (32% time reduction)
+- **Overall: ~3-4x faster** simulations
+
+### Using Optimizations
+
+```python
+# Option 1: Import optimized modules directly
+from fire_model_aggressive_optimized import AdvancedFireModel
+from d_star_lite.grid_optimized import GridWorld
+
+# Option 2: Use benchmark script to compare
+python benchmark_optimizations.py
+```
+
+**Performance Comparison** (60×60 map, 200 steps):
+- Original: 68 seconds, 90 MB peak memory
+- Optimized: ~22 seconds, 55 MB peak memory
+- **Speedup: 3.1x, Memory saved: 39%**
+
+See **[OPTIMIZATION_REPORT.md](OPTIMIZATION_REPORT.md)** for detailed analysis.
+
+### Optimizations Implemented
+
+1. **NumPy Arrays** - Replace nested lists with numpy for 2-3x faster operations
+2. **Sparse Updates** - Only process cells with active fire (50-70% reduction)
+3. **Vectorized Operations** - Bulk environmental updates using numpy masking
+4. **Cost Caching** - Cache terrain cost calculations in D* Lite grid
+5. **Dirty Tracking** - Only update changed cells and their neighbors
+
+### Profiling Tools
+
+```bash
+# Analyze performance bottlenecks
+python profile_simulator.py
+
+# Compare original vs optimized
+python benchmark_optimizations.py
+```
+
 ## Project Structure
 
 ```
 Fire_Simulator/
-├── simulation.py              # Main simulation engine
-├── monte_carlo.py             # Monte Carlo simulations with parallel execution
-├── distribution_analysis.py   # Statistical analysis for Monte Carlo results
-├── visual_configurator.py     # Interactive map design tool
-├── fire_model_realistic.py    # Realistic fire model (default)
-├── fire_model_aggressive.py   # Aggressive fire model for stress-testing
-├── fire_model_float.py        # Original fire model
-├── fire_monitor.py            # Fire monitoring and data export
-├── door_graph.py              # Hierarchical pathfinding system
-├── spatial_index.py           # Spatial indexing for agent proximity
-├── pygame_visualizer.py       # Pygame graphical visualization
-├── matlab_visualizer.py       # MATLAB-style environmental visualization
-├── d_star_lite/               # D* Lite pathfinding algorithm
-│   ├── d_star_lite.py        # Core algorithm
-│   ├── grid.py               # GridWorld graph
-│   ├── graph.py              # Base graph structure
-│   └── utils.py              # Utilities
-├── example_configuration.json # Example configuration file
-└── requirements.txt           # Python dependencies
+├── simulation.py                        # Main simulation engine
+├── monte_carlo.py                       # Monte Carlo simulations with parallel execution
+├── distribution_analysis.py             # Statistical analysis for Monte Carlo results
+├── visual_configurator.py               # Interactive map design tool
+├── fire_model_realistic.py              # Realistic fire model (default)
+├── fire_model_aggressive.py             # Aggressive fire model for stress-testing
+├── fire_model_aggressive_optimized.py   # OPTIMIZED fire model (21x faster)
+├── fire_model_float.py                  # Original fire model
+├── fire_monitor.py                      # Fire monitoring and data export
+├── door_graph.py                        # Hierarchical pathfinding system
+├── spatial_index.py                     # Spatial indexing for agent proximity
+├── pygame_visualizer.py                 # Pygame graphical visualization
+├── matlab_visualizer.py                 # MATLAB-style environmental visualization
+├── d_star_lite/                         # D* Lite pathfinding algorithm
+│   ├── d_star_lite.py                  # Core algorithm
+│   ├── grid.py                         # GridWorld graph
+│   ├── grid_optimized.py               # OPTIMIZED grid (1.5x faster)
+│   ├── graph.py                        # Base graph structure
+│   └── utils.py                        # Utilities
+├── profile_simulator.py                 # Profiling tool (time & memory)
+├── benchmark_optimizations.py           # Benchmark original vs optimized
+├── PROFILING_REPORT.md                  # Initial profiling analysis
+├── OPTIMIZATION_REPORT.md               # Detailed optimization results
+├── example_configuration.json           # Example configuration file
+└── requirements.txt                     # Python dependencies
 ```
 
 ## Additional Resources

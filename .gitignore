@@ -8,4 +8,5 @@
 CLAUDE.md
 *.json
 !example_configuration.json
-configs/*
+configs/
+monte_carlo_results/

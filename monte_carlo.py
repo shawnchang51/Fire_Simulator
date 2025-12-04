@@ -47,6 +47,7 @@ from d_star_lite.utils import coordsToStateName, stateNameToCoords
 from distribution_analysis import compute_distributions, compute_per_run_distributions, print_distribution_summary
 import argparse, json, os
 import random
+import numpy as np
 from collections import Counter
 import multiprocessing as mp
 from multiprocessing import Pool, cpu_count
@@ -552,14 +553,42 @@ def save_comprehensive_results(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Helper function to convert non-JSON-serializable keys (like tuples) to strings
-    def convert_dict_keys_to_strings(obj):
-        """Recursively convert dictionary keys to strings for JSON serialization."""
+    def convert_for_json(obj):
+        """Recursively convert objects to JSON-serializable Python types.
+
+        - Converts dict keys to strings
+        - Converts numpy scalars/arrays to native Python types
+        - Recursively processes lists, tuples and dicts
+        """
+        # Dict: convert keys to strings and recurse
         if isinstance(obj, dict):
-            return {str(k): convert_dict_keys_to_strings(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_dict_keys_to_strings(item) for item in obj]
-        else:
-            return obj
+            return {str(k): convert_for_json(v) for k, v in obj.items()}
+
+        # List or tuple: recurse
+        if isinstance(obj, (list, tuple)):
+            return [convert_for_json(item) for item in obj]
+
+        # numpy ndarray -> list
+        if isinstance(obj, np.ndarray):
+            return convert_for_json(obj.tolist())
+
+        # numpy scalar types
+        if isinstance(obj, np.generic):
+            try:
+                if np.issubdtype(obj.dtype, np.integer):
+                    return int(obj)
+                if np.issubdtype(obj.dtype, np.floating):
+                    return float(obj)
+                if np.issubdtype(obj.dtype, np.bool_):
+                    return bool(obj)
+            except Exception:
+                try:
+                    return obj.item()
+                except Exception:
+                    return str(obj)
+
+        # Fallback: return as-is (json.dump will raise if not serializable)
+        return obj
 
     # 1. Save FULL results (every simulation run) - ONLY if requested
     if save_full_results:
@@ -574,8 +603,8 @@ def save_comprehensive_results(
                 "time_per_run_seconds": elapsed_time / num_runs if num_runs > 0 else 0,
             },
             "configuration": config.to_dict(),
-            "individual_runs": convert_dict_keys_to_strings(results),
-            "aggregated_statistics": convert_dict_keys_to_strings(statistics)
+            "individual_runs": convert_for_json(results),
+            "aggregated_statistics": convert_for_json(statistics)
         }
 
         with open(full_results_path, 'w', encoding='utf-8') as f:
@@ -587,7 +616,7 @@ def save_comprehensive_results(
     # 2. Save statistics only (smaller file)
     stats_path = output_dir / "statistics.json"
     with open(stats_path, 'w', encoding='utf-8') as f:
-        json.dump(convert_dict_keys_to_strings(statistics), f, indent=2)
+        json.dump(convert_for_json(statistics), f, indent=2)
     print(f"  ✓ Saved statistics to: {stats_path}")
 
     # 3. Save configuration used

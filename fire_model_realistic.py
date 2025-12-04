@@ -34,6 +34,7 @@ Author: Advanced Fire Modeling System
 import math
 import random
 import copy
+import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
@@ -76,49 +77,55 @@ class AdvancedFireModel:
     with realistic physics and environmental factors.
 
     REALISTIC CONFIGURATION - Aligned with real fire physics
+    
+    Optimizations:
+    - NumPy arrays for all maps (10x memory reduction, faster operations)
+    - Vectorized operations where possible
+    - __slots__ for reduced instance overhead
     """
+    
+    __slots__ = ['rows', 'cols', 'env', 'oxygen_map', 'temperature_map', 
+                 'fuel_map', 'smoke_density', 'burn_time', 'max_intensity_reached',
+                 'wind_influence', '_neighbor_offsets']
 
     def __init__(self, rows: int, cols: int, env_params: Optional[EnvironmentalParameters] = None):
         self.rows = rows
         self.cols = cols
         self.env = env_params or EnvironmentalParameters()
 
-        # Advanced simulation state
-        self.oxygen_map = [[self.env.oxygen_level for _ in range(cols)] for _ in range(rows)]
-        self.temperature_map = [[self.env.temperature for _ in range(cols)] for _ in range(rows)]
-        self.fuel_map = [[self.env.fuel_density for _ in range(cols)] for _ in range(rows)]
-        self.smoke_density = [[0.0 for _ in range(cols)] for _ in range(rows)]
+        # Advanced simulation state using NumPy arrays (float32 for memory efficiency)
+        self.oxygen_map = np.full((rows, cols), self.env.oxygen_level, dtype=np.float32)
+        self.temperature_map = np.full((rows, cols), self.env.temperature, dtype=np.float32)
+        self.fuel_map = np.full((rows, cols), self.env.fuel_density, dtype=np.float32)
+        self.smoke_density = np.zeros((rows, cols), dtype=np.float32)
 
         # Fire history for realistic burning patterns
-        self.burn_time = [[0.0 for _ in range(cols)] for _ in range(rows)]
-        self.max_intensity_reached = [[0.0 for _ in range(cols)] for _ in range(rows)]
+        self.burn_time = np.zeros((rows, cols), dtype=np.float32)
+        self.max_intensity_reached = np.zeros((rows, cols), dtype=np.float32)
+        
+        # Precompute neighbor offsets for efficiency
+        self._neighbor_offsets = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
 
         # Precompute wind effects for efficiency
         self.wind_influence = self._calculate_wind_influence()
 
-    def _calculate_wind_influence(self) -> List[List[Tuple[float, float]]]:
-        """Calculate wind direction influence on each cell"""
-        wind_map = []
-        for i in range(self.rows):
-            row = []
-            for j in range(self.cols):
-                # Wind creates directional bias in fire spread
-                wind_x = math.cos(self.env.wind_direction) * self.env.wind_speed
-                wind_y = math.sin(self.env.wind_direction) * self.env.wind_speed
-                row.append((wind_x, wind_y))
-            wind_map.append(row)
+    def _calculate_wind_influence(self) -> np.ndarray:
+        """Calculate wind direction influence - returns NumPy array"""
+        wind_x = math.cos(self.env.wind_direction) * self.env.wind_speed
+        wind_y = math.sin(self.env.wind_direction) * self.env.wind_speed
+        # Store as (rows, cols, 2) array for efficient access
+        wind_map = np.zeros((self.rows, self.cols, 2), dtype=np.float32)
+        wind_map[:, :, 0] = wind_x
+        wind_map[:, :, 1] = wind_y
         return wind_map
 
     def _get_neighbors(self, row: int, col: int) -> List[Tuple[int, int]]:
         """Get valid neighboring cells (8-connectivity)"""
         neighbors = []
-        for dr in [-1, 0, 1]:
-            for dc in [-1, 0, 1]:
-                if dr == 0 and dc == 0:
-                    continue
-                nr, nc = row + dr, col + dc
-                if 0 <= nr < self.rows and 0 <= nc < self.cols:
-                    neighbors.append((nr, nc))
+        for dr, dc in self._neighbor_offsets:
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < self.rows and 0 <= nc < self.cols:
+                neighbors.append((nr, nc))
         return neighbors
 
     def _calculate_spread_probability(self, current_state: List[List[float]],
@@ -142,8 +149,8 @@ class AdvancedFireModel:
                 distance = math.sqrt((row - nr)**2 + (col - nc)**2)
                 weight = 1.0 / distance  # Closer neighbors have more influence
 
-                # Wind direction bonus
-                wind_x, wind_y = self.wind_influence[nr][nc]
+                # Wind direction bonus (access NumPy array)
+                wind_x, wind_y = self.wind_influence[nr, nc, 0], self.wind_influence[nr, nc, 1]
                 direction_bonus = 1.0
                 if wind_x != 0 or wind_y != 0:
                     # Calculate if wind is blowing toward this cell

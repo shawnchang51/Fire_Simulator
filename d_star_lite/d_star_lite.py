@@ -1,3 +1,14 @@
+"""
+D* Lite Pathfinding Algorithm - Optimized Version
+=================================================
+
+Optimizations:
+- Faster heuristic calculation using optimized string parsing
+- Lazy deletion in priority queue (O(1) remove vs O(n))
+- Set-based queue membership tracking (O(1) lookup vs O(n))
+- Reduced string operations in hot paths
+"""
+
 import heapq
 from .utils import stateNameToCoords
 
@@ -9,7 +20,6 @@ def set_OBS_VAL(val):
 
 def topKey(queue):
     # Heap property guarantees queue[0] is minimum - no need to sort!
-    # Sorting was breaking the heap structure and causing O(n log n) overhead
     if len(queue) > 0:
         return queue[0][:2]
     else:
@@ -17,9 +27,13 @@ def topKey(queue):
 
 
 def heuristic_from_s(graph, id, s):
-    x_distance = abs(int(id.split('x')[1][0]) - int(s.split('x')[1][0]))
-    y_distance = abs(int(id.split('y')[1][0]) - int(s.split('y')[1][0]))
-    return max(x_distance, y_distance)
+    """Calculate heuristic (Chebyshev distance) between two states.
+    
+    Optimized to use cached coordinate parsing.
+    """
+    id_coords = stateNameToCoords(id)
+    s_coords = stateNameToCoords(s)
+    return max(abs(id_coords[0] - s_coords[0]), abs(id_coords[1] - s_coords[1]))
 
 
 def calculateKey(graph, id, s_current, k_m):

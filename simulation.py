@@ -34,6 +34,7 @@ from datetime import datetime
 import argparse
 import copy
 import numpy as np
+from typing import Union
 
 try:
     from pygame_visualizer import EvacuationVisualizer
@@ -56,7 +57,7 @@ class SimulationConfig:
     map_cols: int
     max_occupancy: int
     start_positions: list[str]
-    initial_fire_map: list[list[float]]
+    initial_fire_map: Union[list[list[float]], np.ndarray]
     agent_num: int
     viewing_range: int = 5
     # New spatial/temporal parameters
@@ -66,6 +67,7 @@ class SimulationConfig:
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
     door_configs: list[dict] = None  # Optional door configurations
+    targets: list[str] = None  # Target waypoints for agents (used when no door_configs)
     consider_env_factors: bool = False  # Whether agents consider temperature and smoke in pathfinding
     wall_preference: float = 0.0  # Wall-following preference: 0=no preference, higher values=stronger wall-following
     # Knowledge sharing parameters
@@ -75,12 +77,18 @@ class SimulationConfig:
 
     @classmethod
     def from_json(cls, json_data):
+        # Convert fire map to numpy array immediately for efficiency
+        fire_map = json_data.get('initial_fire_map',
+                                 [[0 for _ in range(json_data['map_cols'])] for _ in range(json_data['map_rows'])])
+        if not isinstance(fire_map, np.ndarray):
+            fire_map = np.array(fire_map, dtype=np.float32)
+
         config = cls(
             map_rows=json_data['map_rows'],
             map_cols=json_data['map_cols'],
             max_occupancy=json_data['max_occupancy'],
             start_positions=json_data['start_positions'],
-            initial_fire_map=json_data.get('initial_fire_map', [[0 for _ in range(json_data['map_cols'])] for _ in range(json_data['map_rows'])]),
+            initial_fire_map=fire_map,
             agent_num=json_data['agent_num'],
             viewing_range=json_data.get('viewing_range', 5),
             cell_size=json_data.get('cell_size', 0.3),
@@ -89,6 +97,7 @@ class SimulationConfig:
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
             agent_fearness=json_data.get('agent_fearness', []),
             door_configs=json_data.get('door_configs', []),
+            targets=json_data.get('targets', []),
             consider_env_factors=json_data.get('consider_env_factors', False),
             wall_preference=json_data.get('wall_preference', 0.0),
             communication_range=json_data.get('communication_range', 15.0),
@@ -121,6 +130,7 @@ class SimulationConfig:
             'fire_model_type': self.fire_model_type,
             'agent_fearness': self.agent_fearness,
             'door_configs': self.door_configs,
+            'targets': self.targets,
             'consider_env_factors': self.consider_env_factors,
             'wall_preference': self.wall_preference,
             'communication_range': self.communication_range,
@@ -147,7 +157,7 @@ class EvacuationAgent():
                  'k_m', 'queue', 'queue_set', 's_current', 'position_history',
                  's_new', '_map_rows', '_map_cols']
     
-    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False, wall_distance_map=None, wall_preference=0.0, initial_fire_map=None):
+    def __init__(self, id: int, start:str, occupancy, max_occupancy, map_rows, map_cols, viewing_range=10, fire_fearness=1.0, base_door_graph: DoorGraph=None, fire_model=None, consider_env_factors=False, wall_distance_map=None, wall_preference=0.0, initial_fire_map=None, targets=None):
         try:
             self.id = id
             self.start = start
@@ -177,17 +187,26 @@ class EvacuationAgent():
             except Exception as e:
                 raise ValueError(f"Agent {id}: Failed to create GridWorld with dimensions {map_cols}x{map_rows}: {e}")
 
-            path = replan_path(self.door_graph, start, self.initial_fire_map if self.initial_fire_map is not None else self.graph.cells)
-            # Reduced logging - only print in non-silent mode (controlled by simulation)
-            # print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
-            # print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
-            if path is None:
-                raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
+            # Use door graph pathfinding if available, otherwise use provided targets directly
+            if self.door_graph is not None:
+                path = replan_path(self.door_graph, start, self.initial_fire_map if self.initial_fire_map is not None else self.graph.cells)
+                # Reduced logging - only print in non-silent mode (controlled by simulation)
+                # print(f"\033[31mAgent {id} initial door graph: {self.door_graph}\033[0m")
+                # print(f"\033[31mAgent {id} initial door path from {start}: {path}\033[0m")
+                if path is None:
+                    raise ValueError(f"Agent {id}: No valid door path found from start position {start}")
 
-            self.targetidx = 0
-            self.targets = [self.door_graph.nodes[node].position for node in path]
-            self.target = self.targets[self.targetidx]
-            # door_path will be populated as agent reaches each door/exit
+                self.targetidx = 0
+                self.targets = [self.door_graph.nodes[node].position for node in path]
+                self.target = self.targets[self.targetidx]
+                # door_path will be populated as agent reaches each door/exit
+            else:
+                # No door graph - use simple direct pathfinding to targets
+                if targets is None or len(targets) == 0:
+                    raise ValueError(f"Agent {id}: No targets provided and no door graph available")
+                self.targetidx = 0
+                self.targets = targets
+                self.target = self.targets[self.targetidx]
 
             try:
                 start_coords = stateNameToCoords(start)
@@ -399,6 +418,19 @@ class EvacuationAgent():
 
     def set_next_target(self, current_location, replan=False):
         try:
+            # Handle simple case without door graph
+            if self.door_graph is None:
+                # No door graph - simple waypoint navigation
+                self.targetidx += 1
+                if self.targetidx >= len(self.targets):
+                    return 'Evacuated'
+
+                # Move to next target
+                self.target = self.targets[self.targetidx]
+                self.graph.setGoal(self.target)
+                return 'New Target Set'
+
+            # Original door graph logic
             # Record the door that was just reached (before incrementing targetidx)
             self.door_path.append(current_location)
 
@@ -799,7 +831,7 @@ class EvacuationSimulation():
 
         try:
             # OPTIMIZATION: Use NumPy array for shared fire map if possible
-            if hasattr(config, 'initial_fire_map') and config.initial_fire_map:
+            if hasattr(config, 'initial_fire_map') and config.initial_fire_map is not None:
                 self.shared_fire_map = config.initial_fire_map
             else:
                 self.shared_fire_map = [[0 for _ in range(config.map_cols)] for _ in range(config.map_rows)]
@@ -820,7 +852,8 @@ class EvacuationSimulation():
                 print(f"Wall distance map created with {len(self.wall_distance_map)} cells.")
 
             self.agents: list[EvacuationAgent] = []
-            self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs)
+            # Only build door graph if there are door configs
+            self.base_door_graph = build_door_graph(self.shared_fire_map, self.door_configs) if self.door_configs else None
             for i in range(self.agent_num):
                 start_pos = config.start_positions[i]  # Example start positions; modify as needed
                 # Get fearness for this agent (default to 1.0 if not specified)
@@ -828,6 +861,9 @@ class EvacuationSimulation():
                 if config.agent_fearness and i < len(config.agent_fearness):
                     fearness = config.agent_fearness[i]
                 try:
+                    # Get targets - either from config (when no door graph) or will be computed from door graph
+                    agent_targets = getattr(config, 'targets', None) if self.base_door_graph is None else None
+
                     agent = EvacuationAgent(
                         i, start_pos, self.occupancy, self.max_occupancy,
                         self.map_rows, self.map_cols, self.viewing_range,
@@ -837,7 +873,8 @@ class EvacuationSimulation():
                         consider_env_factors=config.consider_env_factors,
                         wall_distance_map=self.wall_distance_map,
                         wall_preference=config.wall_preference,
-                        initial_fire_map=self.shared_fire_map
+                        initial_fire_map=self.shared_fire_map,
+                        targets=agent_targets
                     )
                     self.agents.append(agent)
                 except Exception as e:
@@ -1077,7 +1114,29 @@ class EvacuationSimulation():
             self.anim.update(fire_data['oxygen_map'])
         
 
-    def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False) -> dict:
+    def _compute_rl_reward(self, evacuated: int, stuck: int, dead: int, steps: int) -> float:
+        """
+        Compute RL reward signal for floor plan design optimization.
+
+        Args:
+            evacuated: Number of agents successfully evacuated
+            stuck: Number of agents stuck
+            dead: Number of agents dead/trapped
+            steps: Total simulation steps taken
+
+        Returns:
+            float: Reward value (higher is better)
+        """
+        # Reward structure for floor plan design
+        evacuation_bonus = evacuated * 10.0
+        stuck_penalty = stuck * -5.0
+        death_penalty = dead * -20.0
+        time_penalty = steps * -0.01  # Encourage faster evacuation
+
+        return evacuation_bonus + stuck_penalty + death_penalty + time_penalty
+
+    def run(self, max_steps=1000, show_visualization=False, use_pygame=False, use_matlab=False,
+            early_termination=False, stuck_threshold=0.5, death_threshold=0.3) -> dict:
         '''
         Run the evacuation simulation until all agents have evacuated or max_steps is reached.
         Args:
@@ -1085,6 +1144,9 @@ class EvacuationSimulation():
             show_visualization (bool): Whether to show text-based visualization in the console.
             use_pygame (bool): Whether to use pygame for visualization if available.
             use_matlab (bool): Whether to use MATLAB-style visualization if available.
+            early_termination (bool): Enable early stopping for RL training (bad designs).
+            stuck_threshold (float): Terminate if this fraction of agents stuck (0-1).
+            death_threshold (float): Terminate if this fraction of agents dead (0-1).
         Returns:
             dict: Summary of simulation results including path_count, steps, average_fire_damage,
                   average_peak_temp, average_avg_temp, evacuated_agents, survived_agents.
@@ -1159,7 +1221,36 @@ class EvacuationSimulation():
                     else:
                         visualizer.update_display(self.steps, self.agents, self.door_configs, status, reached_targets)
                     time.sleep(2)
+                self.simulation_results['termination_reason'] = 'all_resolved'
                 break
+
+            # Early termination for RL training
+            if early_termination:
+                # Count agents by status
+                active_count = len(self.agents)
+                evacuated_count = len(self.evacuated_agents)
+                # Count stuck and dead agents from agent_records
+                stuck_count = sum(1 for record in self.agent_records if record.get('status') == 'stuck')
+                dead_count = sum(1 for record in self.agent_records if record.get('status') in ('trapped', 'dead'))
+
+                # All active agents resolved - normal completion
+                if active_count == 0:
+                    self.simulation_results['termination_reason'] = 'all_resolved'
+                    break
+
+                # Most agents stuck - bad floor plan design
+                if stuck_count > self.agent_num * stuck_threshold:
+                    if not self.silent:
+                        print(f"Early termination: {stuck_count}/{self.agent_num} agents stuck (>{stuck_threshold*100}% threshold)")
+                    self.simulation_results['termination_reason'] = 'mostly_stuck'
+                    break
+
+                # High casualty rate - bad design
+                if dead_count > self.agent_num * death_threshold:
+                    if not self.silent:
+                        print(f"Early termination: {dead_count}/{self.agent_num} agents dead (>{death_threshold*100}% threshold)")
+                    self.simulation_results['termination_reason'] = 'high_casualties'
+                    break
             elif self.steps >= max_steps:
                 if not self.silent:
                     print("Maximum steps reached. Ending simulation.")
@@ -1178,6 +1269,7 @@ class EvacuationSimulation():
                     }
                     self.agent_records.append(agent_record)
 
+                self.simulation_results['termination_reason'] = 'max_steps_reached'
                 break
 
             results = self.step()
@@ -1250,15 +1342,30 @@ class EvacuationSimulation():
 
         if visualizer:
             visualizer.close()
-        
+
+        # Compute agent status counts for RL metrics
+        evacuated_count = len(self.evacuated_agents)
+        stuck_count = sum(1 for record in self.agent_records if record.get('status') == 'stuck')
+        dead_count = sum(1 for record in self.agent_records if record.get('status') in ('trapped', 'dead'))
+
         self.simulation_results['path_count'] = self.path_count
         self.simulation_results['steps'] = self.steps
         self.simulation_results['average_fire_damage'] = self.average_fire_damage
         self.simulation_results['average_peak_temp'] = self.average_peak_temp
         self.simulation_results['average_avg_temp'] = self.average_avg_temp
-        self.simulation_results['evacuated_agents'] = len(self.evacuated_agents)
+        self.simulation_results['evacuated_agents'] = evacuated_count
         self.simulation_results['survived_agents'] = self.survived_agents
         self.simulation_results['agent_records'] = self.agent_records  # Add individual agent data
+
+        # Add RL training metrics
+        self.simulation_results['stuck_count'] = stuck_count
+        self.simulation_results['dead_count'] = dead_count
+        self.simulation_results['survival_rate'] = evacuated_count / self.agent_num if self.agent_num > 0 else 0
+
+        # Compute RL reward (for floor plan optimization)
+        if early_termination:
+            reward = self._compute_rl_reward(evacuated_count, stuck_count, dead_count, self.steps)
+            self.simulation_results['reward'] = reward
 
         return self.simulation_results
 

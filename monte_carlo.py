@@ -391,7 +391,7 @@ def _run_single_simulation(args):
         # Return error result instead of crashing the worker process
         import traceback
         error_msg = f"Run {run_number + 1}/{total_runs} failed: {str(e)}"
-        print(f"⚠️  {error_msg}")
+        print(f"WARNING: {error_msg}")
 
         # Return a minimal result dictionary to avoid breaking aggregation
         return {
@@ -504,7 +504,7 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
     statistics['successful_runs'] = num_runs - error_count
 
     if error_count > 0:
-        print(f"⚠️  Warning: {error_count}/{num_runs} simulations failed with errors")
+        print(f"WARNING: {error_count}/{num_runs} simulations failed with errors")
     print(f"Overall Success Rate: {success_rate:.1f}% ({evacuated_agents}/{total_agents} agents evacuated)")
 
     # Compute per-agent distributions across all runs
@@ -602,28 +602,28 @@ def save_comprehensive_results(
                 "elapsed_time_seconds": elapsed_time,
                 "time_per_run_seconds": elapsed_time / num_runs if num_runs > 0 else 0,
             },
-            "configuration": config.to_dict(),
+            "configuration": convert_for_json(config.to_dict()),
             "individual_runs": convert_for_json(results),
             "aggregated_statistics": convert_for_json(statistics)
         }
 
         with open(full_results_path, 'w', encoding='utf-8') as f:
             json.dump(full_data, f, indent=2)
-        print(f"  ✓ Saved full results to: {full_results_path}")
+        print(f"  [OK] Saved full results to: {full_results_path}")
     else:
-        print(f"  ⊘ Skipped full_results.json (memory-efficient mode)")
+        print(f"  [SKIP] Skipped full_results.json (memory-efficient mode)")
 
     # 2. Save statistics only (smaller file)
     stats_path = output_dir / "statistics.json"
     with open(stats_path, 'w', encoding='utf-8') as f:
         json.dump(convert_for_json(statistics), f, indent=2)
-    print(f"  ✓ Saved statistics to: {stats_path}")
+    print(f"  [OK] Saved statistics to: {stats_path}")
 
     # 3. Save configuration used
     config_path = output_dir / "config_used.json"
     with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config.to_dict(), f, indent=2)
-    print(f"  ✓ Saved configuration to: {config_path}")
+        json.dump(convert_for_json(config.to_dict()), f, indent=2)
+    print(f"  [OK] Saved configuration to: {config_path}")
 
     # 4. Save human-readable summary
     summary_path = output_dir / "summary.txt"
@@ -714,9 +714,9 @@ PATH STATISTICS
 
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write(summary_text)
-    print(f"  ✓ Saved summary to: {summary_path}")
+    print(f"  [OK] Saved summary to: {summary_path}")
 
-    print(f"\n  📁 All results saved to: {output_dir}\n")
+    print(f"\n  All results saved to: {output_dir}\n")
 
 
 if __name__ == "__main__":
@@ -825,7 +825,7 @@ Output:
     output_dir = output_base_dir / f"{config_name}_{timestamp}"
 
     # Save comprehensive results
-    print(f"\n📊 Saving results...")
+    print(f"\nSaving results...")
     mode = 'parallel' if args.parallel else 'serial'
     save_comprehensive_results(
         config=sim_config,
@@ -855,6 +855,6 @@ Output:
     print(f"\nSuccess Rate: {success_rate:.2f}%")
     print(f"Evacuated: {statistics['evacuated_agents']}/{total_agents} agents")
     if statistics.get('error_count', 0) > 0:
-        print(f"⚠️  Failed runs: {statistics['error_count']}/{args.runs}")
-    print(f"\n📁 Full results saved to: {output_dir}")
+        print(f"WARNING: Failed runs: {statistics['error_count']}/{args.runs}")
+    print(f"\nFull results saved to: {output_dir}")
     print(f"{'='*60}\n")

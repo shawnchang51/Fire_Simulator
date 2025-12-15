@@ -138,11 +138,83 @@ def replace_fire(config: SimulationConfig, num_fires: int=30) -> SimulationConfi
     config.map_cols = actual_cols
     return config
 
-def replace_agents(config: SimulationConfig, num_agents: int=None) -> SimulationConfig:
+def compute_reachable_positions(config: SimulationConfig) -> list:
+    """
+    Pre-compute all reachable positions for agent placement.
+    This is expensive, so we cache the result for reuse across multiple runs.
+
+    Args:
+        config: Simulation configuration
+
+    Returns:
+        List of (row, col) tuples representing positions where agents can spawn
+        and reach an exit through the door graph
+    """
+    # Get actual dimensions from the fire map itself (not from config)
+    actual_rows = len(config.initial_fire_map)
+    actual_cols = max(len(row) for row in config.initial_fire_map) if actual_rows > 0 else 0
+
+    # Create set of invalid positions (doors, exits, obstacles - but NOT fire)
+    invalid_positions = set()
+
+    # Add door and exit positions
+    if config.door_configs:
+        for door in config.door_configs:
+            col, row = stateNameToCoords(door['position'])
+            invalid_positions.add((row, col))
+
+    # Add ONLY obstacle positions (fire positions are allowed for agent spawning)
+    for row_idx, row in enumerate(config.initial_fire_map):
+        for col_idx, cell in enumerate(row):
+            # Only obstacles (<0), not fire (>0)
+            if cell < 0:
+                invalid_positions.add((row_idx, col_idx))
+
+    # Find all valid positions (not obstacles, doors, or exits)
+    valid_positions = []
+    for row_idx in range(actual_rows):
+        for col_idx in range(actual_cols):
+            if (row_idx, col_idx) not in invalid_positions:
+                valid_positions.append((row_idx, col_idx))
+
+    # If using door graphs, validate that agents can reach exits
+    if config.door_configs:
+        from door_graph import build_door_graph, replan_path
+
+        print(f"Computing reachable positions (one-time operation)...")
+        print(f"  Testing {len(valid_positions)} positions for exit reachability...")
+
+        # Build door graph to test connectivity (use clean map without fire)
+        clean_fire_map = [[cell if cell < 0 else 0 for cell in row] for row in config.initial_fire_map]
+        door_graph = build_door_graph(clean_fire_map, config.door_configs)
+
+        # Filter positions to only those with valid paths to exits
+        reachable_positions = []
+        for row_idx, col_idx in valid_positions:
+            pos = coordsToStateName(col_idx, row_idx)
+            # Test if this position can reach an exit
+            path = replan_path(door_graph, pos, clean_fire_map)
+            if path is not None:
+                reachable_positions.append((row_idx, col_idx))
+
+        print(f"  Found {len(reachable_positions)} reachable positions (cached for reuse)")
+
+        if len(reachable_positions) == 0:
+            raise ValueError(
+                f"No reachable positions found! All {len(valid_positions)} obstacle-free positions "
+                f"cannot reach exits through the door graph."
+            )
+
+        return reachable_positions
+    else:
+        # No door graph, all valid positions are reachable
+        return valid_positions
+
+
+def replace_agents(config: SimulationConfig, num_agents: int=None, reachable_positions_cache: list=None) -> SimulationConfig:
     """
     Replace agent starting positions with random valid locations.
     Agents can't be placed on fire, doors, exits, or obstacles.
-    Also validates that each agent can reach an exit through the door graph.
 
     Additionally, assigns random fearness values to each agent based on config.agent_fearness:
     - If agent_fearness has 2+ values: Random uniform between first two values
@@ -152,6 +224,7 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
     Args:
         config: Simulation configuration
         num_agents: Number of agents (if None, uses config.agent_num)
+        reachable_positions_cache: Pre-computed list of reachable positions (avoids expensive recomputation)
 
     Returns:
         Updated configuration with new agent starting positions and fearness values
@@ -164,63 +237,18 @@ def replace_agents(config: SimulationConfig, num_agents: int=None) -> Simulation
     if num_agents is None:
         num_agents = config.agent_num
 
-    # Get actual dimensions from the fire map itself (not from config)
-    actual_rows = len(config.initial_fire_map)
-    # Handle jagged arrays by finding the maximum column count
-    actual_cols = max(len(row) for row in config.initial_fire_map) if actual_rows > 0 else 0
-
-    # Create set of invalid positions (fire, doors, exits, obstacles)
-    invalid_positions = set()
-
-    # Add door and exit positions
-    if config.door_configs:
-        for door in config.door_configs:
-            col, row = stateNameToCoords(door['position'])
-            invalid_positions.add((row, col))
-
-    # Add fire and obstacle positions
-    for row_idx, row in enumerate(config.initial_fire_map):
-        for col_idx, cell in enumerate(row):
-            # Fire (positive values) or obstacles (<0)
-            if cell != 0:
-                invalid_positions.add((row_idx, col_idx))
-
-    # Find all valid positions
-    # Use actual fire map dimensions, not config dimensions
-    valid_positions = []
-    for row_idx in range(actual_rows):
-        for col_idx in range(actual_cols):
-            if (row_idx, col_idx) not in invalid_positions:
-                valid_positions.append((row_idx, col_idx))
+    # Use cached reachable positions if provided, otherwise compute them
+    if reachable_positions_cache is not None:
+        valid_positions = reachable_positions_cache
+    else:
+        # Fallback: compute on-the-fly (for backward compatibility)
+        valid_positions = compute_reachable_positions(config)
 
     if len(valid_positions) < num_agents:
-        raise ValueError(f"Not enough valid positions for {num_agents} agents. Only {len(valid_positions)} available.")
-
-    # If using door graphs, validate that agents can reach exits
-    if config.door_configs:
-        from door_graph import build_door_graph, replan_path
-
-        # Build door graph to test connectivity
-        door_graph = build_door_graph(config.initial_fire_map, config.door_configs)
-
-        # Filter positions to only those with valid paths to exits
-        reachable_positions = []
-        for row_idx, col_idx in valid_positions:
-            pos = coordsToStateName(col_idx, row_idx)
-            # Test if this position can reach an exit
-            path = replan_path(door_graph, pos, config.initial_fire_map)
-            if path is not None:
-                reachable_positions.append((row_idx, col_idx))
-
-        if len(reachable_positions) < num_agents:
-            raise ValueError(
-                f"Not enough reachable positions for {num_agents} agents. "
-                f"Only {len(reachable_positions)} positions have valid paths to exits "
-                f"(out of {len(valid_positions)} obstacle-free positions)."
-            )
-
-        # Use only reachable positions
-        valid_positions = reachable_positions
+        raise ValueError(
+            f"Not enough reachable positions for {num_agents} agents. "
+            f"Only {len(valid_positions)} positions available."
+        )
 
     # Randomly select agent positions
     agent_positions = random.sample(valid_positions, num_agents)
@@ -270,6 +298,9 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int) -> list:
     # Collect all agent records for distribution analysis
     all_agent_records = []
 
+    # CACHE: Pre-compute reachable positions once for all runs
+    reachable_positions = compute_reachable_positions(config)
+
     # Use tqdm progress bar if available
     iterator = tqdm(range(num_runs), desc="Running simulations", unit="run") if TQDM_AVAILABLE else range(num_runs)
 
@@ -278,7 +309,7 @@ def run_monte_carlo_simulation(config: SimulationConfig, num_runs: int) -> list:
         run_config = copy.deepcopy(config)
         # Randomize fire and agent positions for THIS run
         run_config = replace_fire(run_config)
-        run_config = replace_agents(run_config)
+        run_config = replace_agents(run_config, reachable_positions_cache=reachable_positions)
 
         sim = EvacuationSimulation(run_config, silent=True)
         result = sim.run(500, show_visualization=False, use_pygame=False, use_matlab=False)
@@ -338,12 +369,12 @@ def _run_single_simulation(args):
     Worker function to run a single simulation (for parallel execution).
 
     Args:
-        args: Tuple of (config, run_number, total_runs, save_full_results)
+        args: Tuple of (config, run_number, total_runs, save_full_results, reachable_positions_cache)
 
     Returns:
         Dictionary with simulation results (or error result if failed)
     """
-    config, run_number, total_runs, save_full_results = args
+    config, run_number, total_runs, save_full_results, reachable_positions_cache = args
 
     try:
         # Create a deep copy to avoid shared state between processes
@@ -351,7 +382,7 @@ def _run_single_simulation(args):
 
         # Randomize fire and agent positions for THIS run
         config_copy = replace_fire(config_copy)
-        config_copy = replace_agents(config_copy)
+        config_copy = replace_agents(config_copy, reachable_positions_cache=reachable_positions_cache)
 
         sim = EvacuationSimulation(config_copy, silent=True)
 
@@ -432,8 +463,11 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
         print(f"Memory-efficient mode: Only saving statistics (not full trajectories)")
     print(f"{'='*60}\n")
 
+    # CACHE: Pre-compute reachable positions once for all runs
+    reachable_positions = compute_reachable_positions(config)
+
     # Prepare arguments for each simulation run
-    sim_args = [(config, i, num_runs, save_full_results) for i in range(num_runs)]
+    sim_args = [(config, i, num_runs, save_full_results, reachable_positions) for i in range(num_runs)]
 
     # Run simulations in parallel with progress bar
     with Pool(processes=num_processes) as pool:

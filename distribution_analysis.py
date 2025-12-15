@@ -280,6 +280,11 @@ def print_distribution_summary(distributions: Dict[str, Any]):
     print("DISTRIBUTION ANALYSIS SUMMARY")
     print("="*80)
 
+    # Handle top-level error response from compute_distributions()
+    if isinstance(distributions, dict) and 'error' in distributions:
+        print(f"ERROR computing distributions: {distributions.get('error')}")
+        return
+
     if '_summary' in distributions:
         summary = distributions['_summary']
         print(f"\nTotal Agents: {summary.get('total_agents', 'N/A')}")
@@ -295,6 +300,11 @@ def print_distribution_summary(distributions: Dict[str, Any]):
 
     for metric, data in distributions.items():
         if metric.startswith('_'):  # Skip summary fields
+            continue
+
+        # Defensive: ensure each metric's data is a dict
+        if not isinstance(data, dict):
+            print(f"\n{metric}: Invalid distribution data (expected dict, got {type(data).__name__})")
             continue
 
         if 'error' in data:

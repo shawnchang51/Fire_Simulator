@@ -1869,10 +1869,10 @@ class MultiFidelityEvaluator:
 ## Implementation Roadmap
 
 ### Week 1-2: Phase 1 (Conservative)
-- [ ] Create `configs/rl_training_config.json`
-- [ ] Add early termination to `simulation.py`
-- [ ] Create `rl_simulation.py` wrapper
-- [ ] Benchmark: Target 6,000+ sims/hour
+- [x] Create `configs/rl_training_config.json`
+- [x] Add early termination to `simulation.py`
+- [x] Create `rl_simulation.py` wrapper
+- [x] Benchmark: Target 6,000+ sims/hour
 
 ### Week 3-4: Phase 2 (Moderate)
 - [ ] Implement `fast_pathfinder.py`

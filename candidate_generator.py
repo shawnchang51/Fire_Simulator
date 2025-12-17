@@ -135,13 +135,21 @@ class CandidateGenerator:
     def _find_perimeter_positions(self) -> List[Tuple[int, int]]:
         """
         Find walls on the building perimeter (exits).
+        More flexible: includes walls within perimeter zone that connect to open spaces.
         """
         perimeter = []
+        perimeter_zone = max(3, min(self.rows, self.cols) // 10)  # Adaptive zone size
 
         for x, y in self.valid_wall_positions:
-            # Check if on or near edge
-            if x <= 2 or x >= self.cols - 3 or y <= 2 or y >= self.rows - 3:
+            # Check if in perimeter zone
+            if (x <= perimeter_zone or x >= self.cols - perimeter_zone - 1 or
+                y <= perimeter_zone or y >= self.rows - perimeter_zone - 1):
                 perimeter.append((x, y))
+
+        # If no perimeter positions found, use all valid positions
+        # (allows any wall to be an exit in degenerate cases)
+        if not perimeter:
+            perimeter = self.valid_wall_positions.copy()
 
         return perimeter
 

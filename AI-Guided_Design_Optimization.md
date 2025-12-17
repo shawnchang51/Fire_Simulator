@@ -310,6 +310,45 @@ def from_json(cls, json_data):
 | Memory per simulation | 50MB | 30MB | 40% less |
 | Simulations per hour | 1,800 | 6,000-9,000 | 3-5x more |
 
+### 1.5 Candidate Generator (Completed)
+
+Implemented `candidate_generator.py` for generating door configuration candidates:
+
+**Features:**
+- **Random placement**: Uniform sampling of valid wall positions
+- **Rule-based strategies**:
+  - `boundary_focused`: Prioritizes room boundaries for doors, perimeter for exits
+  - `distributed`: Evenly distributes doors across floor plan grid sectors
+  - `corner_exits`: Places exits in corners, doors on boundaries
+- **Constraint validation**: Minimum spacing, connectivity checks
+- **Room detection**: Uses connected components to identify separate rooms
+- **Flexible exit placement**: Adaptive perimeter zone for exit positioning
+
+**Usage:**
+```python
+from candidate_generator import generate_door_candidates
+
+# Generate 100 candidates
+candidates = generate_door_candidates(
+    floor_plan=floor_plan,
+    num_candidates=100,
+    num_doors_range=(2, 5),
+    num_exits_range=(1, 3),
+    min_door_spacing=5,
+    random_ratio=0.5,  # 50% random, 50% rule-based
+    seed=42
+)
+
+# Each candidate is a list of door dicts
+# [{"id": "d1", "position": "x15y20", "type": "door"}, ...]
+```
+
+**Integration with Pairwise Labeling:**
+- Generates diverse candidate pool for evaluation
+- Supports both random exploration and structured design rules
+- Output format directly compatible with simulation config
+- See `examples/candidate_generator_demo.py` for complete examples
+
 ---
 
 ## Phase 2: Moderate Optimizations (1-2 weeks, 10-50x speedup)
@@ -1863,7 +1902,7 @@ class AIGuidedSearch:
 - [x] Add early termination to `simulation.py`
 - [x] Create `ai_labeling_wrapper.py` with pairwise comparison methods
 - [x] Benchmark: Target 6,000+ sims/hour for label generation
-- [ ] Implement candidate generator (random/rule-based door placement)
+- [x] Implement candidate generator (random/rule-based door placement)
 
 ### Week 3-4: Phase 2 (Moderate - Fast Labeling Pipeline)
 - [ ] Implement `fast_pathfinder.py` (A* for faster evaluations)

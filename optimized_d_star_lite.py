@@ -56,6 +56,10 @@ class OptimizedDStarLite:
         self.U = []
         self.counter = 0  # Tie-breaker
 
+        # Version tracking to ignore stale queue entries
+        self.version = np.zeros((self.rows, self.cols), dtype=np.int32)
+        self.current_version = 0
+
         # k_m for D* Lite
         self.k_m = 0
 
@@ -85,14 +89,17 @@ class OptimizedDStarLite:
         return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
 
     def _insert(self, pos: Tuple[int, int], key: Tuple[float, float]):
-        """Insert node into priority queue."""
+        """Insert node into priority queue with version tracking."""
         self.counter += 1
-        heapq.heappush(self.U, (key, self.counter, pos))
+        self.current_version += 1
+        x, y = pos
+        self.version[y, x] = self.current_version
+        heapq.heappush(self.U, (key, self.counter, pos, self.current_version))
 
-    def _pop(self) -> Tuple[int, int]:
-        """Pop minimum key node from queue."""
-        _, _, pos = heapq.heappop(self.U)
-        return pos
+    def _pop(self) -> Tuple[Tuple[int, int], int]:
+        """Pop minimum key node from queue, returning position and version."""
+        _, _, pos, version = heapq.heappop(self.U)
+        return pos, version
 
     def _get_neighbors(self, pos: Tuple[int, int]) -> List[Tuple[Tuple[int, int], float]]:
         """Get valid neighbors with movement costs."""
@@ -134,15 +141,23 @@ class OptimizedDStarLite:
         if self.g[y, x] != self.rhs[y, x]:
             self._insert(pos, self._calculate_key(pos))
 
-    def compute_shortest_path(self):
-        """Main D* Lite computation loop."""
-        while self.U and (self.U[0][0] < self._calculate_key(self.start) or
-                          self.rhs[self.start[1], self.start[0]] != self.g[self.start[1], self.start[0]]):
+    def compute_shortest_path(self, max_iterations=10000):
+        """Main D* Lite computation loop with safety limit."""
+        iterations = 0
+        while (self.U and
+               iterations < max_iterations and
+               (self.U[0][0] < self._calculate_key(self.start) or
+                self.rhs[self.start[1], self.start[0]] != self.g[self.start[1], self.start[0]])):
 
             k_old = self.U[0][0]
-            u = self._pop()
+            u, u_version = self._pop()
             ux, uy = u
 
+            # Skip stale entries
+            if u_version != self.version[uy, ux]:
+                continue
+
+            iterations += 1
             k_new = self._calculate_key(u)
 
             if k_old < k_new:
@@ -156,6 +171,10 @@ class OptimizedDStarLite:
                 self._update_vertex(u)
                 for neighbor, _ in self._get_neighbors(u):
                     self._update_vertex(neighbor)
+
+        if iterations >= max_iterations:
+            # Safety limit reached - likely no path exists
+            pass
 
     def update_edge_costs(self, changed_cells: List[Tuple[int, int]]):
         """

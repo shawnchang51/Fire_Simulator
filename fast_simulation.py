@@ -88,6 +88,8 @@ class FastEvacuationSim:
             # Each agent gets its own D* Lite instance but shares grid
             nearest_exit = self._nearest_exit(start[0], start[1])
             pathfinder = self.pathfinder_manager.add_agent(start, nearest_exit)
+            # IMPORTANT: Compute initial path before simulation starts
+            pathfinder.compute_shortest_path()
             self.agent_pathfinders.append(pathfinder)
 
         # Initialize fire model

@@ -1,10 +1,10 @@
-# RL Training Optimization Roadmap
+# AI-Guided Design Optimization Roadmap
 
-Performance optimization guide for using Monte Carlo simulations to train reinforcement learning agents for floor plan design.
+Performance optimization guide for using Monte Carlo simulations to train a pairwise ranking model that accelerates door configuration search.
 
 ## Executive Summary
 
-**Goal**: Make simulations fast enough for RL training (100K-10M evaluations)
+**Goal**: Make simulations fast enough for pairwise comparison labeling (10K-100K candidate evaluations)
 
 | Approach | Effort | Speedup | Per-Sim Time |
 |----------|--------|---------|--------------|
@@ -19,21 +19,22 @@ Performance optimization guide for using Monte Carlo simulations to train reinfo
 
 From profiling analysis (`PERFORMANCE_RESULTS.md`):
 
-| Component | Time % | Scaling Issue | Impact on RL |
-|-----------|--------|---------------|--------------|
+| Component | Time % | Scaling Issue | Impact on AI Training |
+|-----------|--------|---------------|----------------------|
 | D* Lite pathfinding | 54% | O(agents × grid × replans) | Critical |
 | Environment updates | 20% | O(agents × fire_changes) | High |
 | Fire simulation | 15% | O(grid_size) per update | Medium |
 | Coordinate parsing | 5% | O(calls) - now cached | Low |
 | I/O and visualization | 6% | O(data_size) | Eliminable |
 
-### Why Current Design is Slow for RL
+### Why Current Design is Slow for Pairwise Labeling
 
-1. **D* Lite over-engineering**: Incremental replanning is great for single runs but wasteful when running millions of independent simulations
-2. **String-based coordinates**: `"x12y9"` format adds overhead vs integer tuples
+1. **Need for batch evaluation**: Training requires k=3-5 Monte Carlo runs per candidate × N candidates per pair
+2. **D* Lite overhead**: Incremental replanning unnecessary when running independent candidate evaluations
 3. **Per-agent graph copies**: Each agent maintains full GridWorld (~1.8MB each)
-4. **Full physics fire model**: Tracks oxygen, temperature, smoke, fuel - unnecessary for training
-5. **Visualization overhead**: Even disabled, setup/teardown costs exist
+4. **Full physics fire model**: Detailed physics tracking unnecessary for relative comparisons
+5. **Visualization overhead**: Setup/teardown costs exist even when disabled
+6. **Sequential labeling**: Cannot efficiently parallelize pairwise comparison generation
 
 ---
 
@@ -41,9 +42,9 @@ From profiling analysis (`PERFORMANCE_RESULTS.md`):
 
 Configuration and minor code changes only. No architectural rewrites.
 
-### 1.1 Training-Optimized Configuration
+### 1.1 Labeling-Optimized Configuration
 
-Create `configs/rl_training_config.json`:
+Create `configs/ai_labeling_config.json`:
 
 ```json
 {
@@ -139,93 +140,144 @@ def _compute_reward(self, evacuated, stuck, dead, steps):
 
 ### 1.3 Disable All I/O
 
-Create `rl_simulation.py` wrapper:
+Create `ai_labeling_wrapper.py` wrapper:
 
 ```python
-"""Lightweight simulation wrapper for RL training."""
+"""Lightweight simulation wrapper for pairwise comparison labeling."""
 
 from simulation import EvacuationSimulation, SimulationConfig
 import numpy as np
 
-class RLSimulationWrapper:
-    """Zero-overhead simulation for RL training."""
+class AILabelingWrapper:
+    """Zero-overhead simulation for generating pairwise labels."""
 
-    def __init__(self, base_config_path='configs/rl_training_config.json'):
+    def __init__(self, base_config_path='configs/ai_labeling_config.json'):
         import json
         with open(base_config_path) as f:
             self.base_config = json.load(f)
 
-    def evaluate(self, floor_plan: np.ndarray,
-                 agent_positions: list,
-                 exit_positions: list,
-                 fire_positions: list = None,
-                 max_steps: int = 200) -> dict:
+    def evaluate_candidate(self, floor_plan: np.ndarray,
+                          door_config: list,
+                          num_trials: int = 1,
+                          seed: int = None) -> dict:
         """
-        Evaluate a floor plan design.
+        Evaluate a single door configuration candidate.
 
         Args:
             floor_plan: 2D numpy array (-2=wall, 0=empty)
-            agent_positions: List of (x, y) tuples for agent starts
-            exit_positions: List of (x, y) tuples for exits
-            fire_positions: Optional list of (x, y) tuples for fire starts
-            max_steps: Maximum simulation steps
+            door_config: List of door dicts [{"id": "d1", "position": "x5y3", "type": "door"}, ...]
+            num_trials: Number of Monte Carlo trials (k=3-5 for labeling)
+            seed: Random seed for reproducibility
 
         Returns:
-            Dict with evacuation metrics and reward
+            Dict with averaged evacuation metrics
         """
-        config = self._build_config(floor_plan, agent_positions,
-                                    exit_positions, fire_positions)
+        results = []
+        for trial in range(num_trials):
+            trial_seed = seed + trial if seed is not None else None
+            config = self._build_config(floor_plan, door_config, trial_seed)
 
-        sim = EvacuationSimulation(config)
+            sim = EvacuationSimulation(config)
 
-        # Run with all overhead disabled
-        result = sim.run(
-            max_steps=max_steps,
-            show_visualization=False,
-            use_pygame=False,
-            use_matlab=False,
-            early_termination=True
-        )
+            # Run with all overhead disabled
+            result = sim.run(
+                max_steps=200,
+                show_visualization=False,
+                use_pygame=False,
+                use_matlab=False,
+                early_termination=True
+            )
+            results.append(result)
 
-        return result
+        # Compute robust statistics (median/trimmed mean)
+        return self._aggregate_results(results)
 
-    def _build_config(self, floor_plan, agents, exits, fires):
-        """Build SimulationConfig from numpy arrays."""
+    def generate_pairwise_labels(self, floor_plan: np.ndarray,
+                                 candidate_pairs: list,
+                                 num_trials: int = 3,
+                                 margin: float = 0.05) -> list:
+        """
+        Generate pairwise comparison labels for training.
+
+        Args:
+            floor_plan: Base floor plan (same for all candidates)
+            candidate_pairs: List of (door_config_A, door_config_B) tuples
+            num_trials: Monte Carlo trials per candidate (k=3-5)
+            margin: Minimum difference to assign label (rejects ambiguous pairs)
+
+        Returns:
+            List of (config_A, config_B, label) where label=1 if A>B, 0 if B>A, None if ambiguous
+        """
+        labels = []
+        for config_a, config_b in candidate_pairs:
+            # Evaluate both candidates
+            result_a = self.evaluate_candidate(floor_plan, config_a, num_trials)
+            result_b = self.evaluate_candidate(floor_plan, config_b, num_trials)
+
+            # Compare using robust metric (survival rate + time penalty)
+            score_a = result_a['survival_rate'] - result_a['avg_evacuation_time'] / 1000
+            score_b = result_b['survival_rate'] - result_b['avg_evacuation_time'] / 1000
+
+            # Assign label with margin
+            if score_a > score_b + margin:
+                label = 1  # A is better
+            elif score_b > score_a + margin:
+                label = 0  # B is better
+            else:
+                label = None  # Ambiguous, discard
+
+            labels.append((config_a, config_b, label, score_a, score_b))
+
+        return labels
+
+    def _build_config(self, floor_plan, door_config, seed):
+        """Build SimulationConfig with door configuration."""
         config_dict = self.base_config.copy()
 
         rows, cols = floor_plan.shape
         config_dict['map_rows'] = rows
         config_dict['map_cols'] = cols
-        config_dict['agent_num'] = len(agents)
-        config_dict['start_positions'] = [f'x{x}y{y}' for x, y in agents]
-        config_dict['targets'] = [f'x{x}y{y}' for x, y in exits]
+        config_dict['initial_fire_map'] = floor_plan.tolist()
+        config_dict['door_configs'] = door_config
 
-        # Convert numpy to list and add fires
-        fire_map = floor_plan.tolist()
-        if fires:
-            for x, y in fires:
-                if 0 <= y < rows and 0 <= x < cols:
-                    fire_map[y][x] = 2.0
-        config_dict['initial_fire_map'] = fire_map
+        if seed is not None:
+            np.random.seed(seed)
 
         return SimulationConfig.from_json(config_dict)
 
-    def batch_evaluate(self, floor_plans: list, num_workers: int = None) -> list:
-        """Evaluate multiple floor plans in parallel."""
+    def _aggregate_results(self, results):
+        """Aggregate multiple trial results using median."""
+        evacuated = np.median([r['evacuated'] for r in results])
+        stuck = np.median([r['stuck'] for r in results])
+        dead = np.median([r['dead'] for r in results])
+        steps = np.median([r['steps'] for r in results])
+        total = len(results[0].get('agents', []))
+
+        return {
+            'evacuated': int(evacuated),
+            'stuck': int(stuck),
+            'dead': int(dead),
+            'steps': int(steps),
+            'survival_rate': evacuated / total if total > 0 else 0,
+            'avg_evacuation_time': steps
+        }
+
+    def batch_evaluate(self, candidates: list, num_workers: int = None) -> list:
+        """Evaluate multiple candidates in parallel."""
         from multiprocessing import Pool, cpu_count
 
         if num_workers is None:
             num_workers = cpu_count()
 
         with Pool(num_workers) as pool:
-            results = pool.map(self._evaluate_single, floor_plans)
+            results = pool.map(self._evaluate_single, candidates)
 
         return results
 
     def _evaluate_single(self, args):
         """Single evaluation for multiprocessing."""
-        floor_plan, agents, exits, fires = args
-        return self.evaluate(floor_plan, agents, exits, fires)
+        floor_plan, door_config, num_trials, seed = args
+        return self.evaluate_candidate(floor_plan, door_config, num_trials, seed)
 ```
 
 ### 1.4 NumPy Fire Map
@@ -911,195 +963,230 @@ def batch_evaluate(scenarios: List[dict],
     return results
 ```
 
-### 2.4 RL Training Interface
+### 2.4 Pairwise Ranking Integration Interface
 
-Create `rl_interface.py`:
+Create `pairwise_ranking_interface.py`:
 
 ```python
 """
-RL Training Interface
-=====================
+Pairwise Ranking Integration Interface
+======================================
 
-Clean interface for training RL agents to design floor plans.
+Interface between scoring network and simulator for pairwise comparison labeling.
 """
 
 import numpy as np
 from typing import Tuple, List, Dict, Any
 from fast_simulation import FastEvacuationSim, SimResult, batch_evaluate
 
-class FloorPlanEnv:
+class ScoringNetworkInterface:
     """
-    Gym-like environment for floor plan design.
+    Interface for scoring network to request candidate evaluations.
 
-    Action space: Place/remove walls, doors, exits
-    State space: Current floor plan + metrics
-    Reward: Based on evacuation performance
+    Architecture:
+    - Candidate Generator produces door configurations
+    - Scoring Network predicts scalar scores
+    - Simulator validates via Monte Carlo and generates pairwise labels
     """
 
     def __init__(self,
                  grid_size: Tuple[int, int] = (30, 30),
-                 num_agents: int = 5,
-                 num_fires: int = 2,
-                 num_exits: int = 2,
-                 max_walls: int = 100):
+                 base_config: str = 'configs/ai_labeling_config.json',
+                 num_trials_per_eval: int = 3):
         """
-        Initialize environment.
+        Initialize interface.
 
         Args:
             grid_size: (rows, cols) of the floor plan
-            num_agents: Number of evacuation agents
-            num_fires: Number of fire sources
-            num_exits: Number of exits
-            max_walls: Maximum walls that can be placed
+            base_config: Path to base simulation config
+            num_trials_per_eval: Monte Carlo trials per candidate (k=3-5)
         """
         self.rows, self.cols = grid_size
-        self.num_agents = num_agents
-        self.num_fires = num_fires
-        self.num_exits = num_exits
-        self.max_walls = max_walls
+        self.num_trials = num_trials_per_eval
+        self.base_config = base_config
 
-        self.reset()
+        # Load base config
+        import json
+        with open(base_config) as f:
+            self.config_template = json.load(f)
 
-    def reset(self) -> np.ndarray:
-        """Reset to empty floor plan."""
-        self.grid = np.zeros((self.rows, self.cols), dtype=np.float32)
-        self.walls_placed = 0
-        self.exits = []
-        self.agent_starts = []
-        self.fire_starts = []
-
-        return self._get_state()
-
-    def step(self, action: Dict[str, Any]) -> Tuple[np.ndarray, float, bool, dict]:
+    def generate_candidate_labels(self,
+                                  floor_plan: np.ndarray,
+                                  candidate_pool: List[Dict],
+                                  num_pairs: int,
+                                  pair_selection: str = 'mixed') -> List[Tuple]:
         """
-        Take action in environment.
+        Generate pairwise comparison labels from candidate pool.
 
-        Actions:
-        - {'type': 'wall', 'x': int, 'y': int}: Place wall
-        - {'type': 'exit', 'x': int, 'y': int}: Place exit
-        - {'type': 'agent', 'x': int, 'y': int}: Place agent start
-        - {'type': 'fire', 'x': int, 'y': int}: Place fire
-        - {'type': 'remove', 'x': int, 'y': int}: Remove wall
-        - {'type': 'evaluate'}: Run simulation and get reward
+        Args:
+            floor_plan: Base floor plan array
+            candidate_pool: List of door configuration dicts
+            num_pairs: Number of pairs to sample and label
+            pair_selection: 'random', 'hard', or 'mixed' sampling strategy
 
         Returns:
-            state, reward, done, info
+            List of (config_A, config_B, label, score_A, score_B) tuples
         """
-        action_type = action['type']
+        # Sample pairs using specified strategy
+        pairs = self._sample_pairs(candidate_pool, num_pairs, pair_selection)
 
-        if action_type == 'evaluate':
-            return self._evaluate()
+        # Generate labels via simulator
+        labels = []
+        for config_a, config_b in pairs:
+            result_a = self.evaluate_candidate(floor_plan, config_a)
+            result_b = self.evaluate_candidate(floor_plan, config_b)
 
-        x, y = action.get('x', 0), action.get('y', 0)
+            # Compute simulator scores (survival rate - time penalty)
+            score_a = self._compute_score(result_a)
+            score_b = self._compute_score(result_b)
 
-        if not (0 <= x < self.cols and 0 <= y < self.rows):
-            return self._get_state(), -1.0, False, {'error': 'out_of_bounds'}
+            # Assign pairwise label with margin
+            margin = 0.05
+            if score_a > score_b + margin:
+                label = 1  # A > B
+            elif score_b > score_a + margin:
+                label = 0  # B > A
+            else:
+                label = None  # Ambiguous, discard
 
-        if action_type == 'wall':
-            if self.walls_placed < self.max_walls and self.grid[y, x] == 0:
-                self.grid[y, x] = -2
-                self.walls_placed += 1
+            if label is not None:
+                labels.append((config_a, config_b, label, score_a, score_b))
 
-        elif action_type == 'exit':
-            if self.grid[y, x] == 0:
-                self.exits.append((x, y))
+        return labels
 
-        elif action_type == 'agent':
-            if self.grid[y, x] == 0 and len(self.agent_starts) < self.num_agents:
-                self.agent_starts.append((x, y))
+    def evaluate_candidate(self, floor_plan: np.ndarray, door_config: Dict) -> Dict:
+        """
+        Evaluate single candidate with k Monte Carlo trials.
 
-        elif action_type == 'fire':
-            if self.grid[y, x] == 0 and len(self.fire_starts) < self.num_fires:
-                self.fire_starts.append((x, y))
+        Args:
+            floor_plan: 2D array (-2=wall, 0=empty)
+            door_config: Door configuration dict
 
-        elif action_type == 'remove':
-            if self.grid[y, x] == -2:
-                self.grid[y, x] = 0
-                self.walls_placed -= 1
+        Returns:
+            Aggregated metrics dict
+        """
+        results = []
+        for trial in range(self.num_trials):
+            sim = self._build_simulation(floor_plan, door_config, seed=trial)
+            result = sim.run(max_steps=200)
+            results.append(result)
 
-        return self._get_state(), 0.0, False, {}
+        # Return median statistics
+        return self._aggregate_results(results)
 
-    def _evaluate(self) -> Tuple[np.ndarray, float, bool, dict]:
-        """Run simulation and return results."""
-        # Validate setup
-        if len(self.exits) == 0:
-            return self._get_state(), -100.0, True, {'error': 'no_exits'}
+    def batch_evaluate_topk(self,
+                            floor_plan: np.ndarray,
+                            candidates: List[Dict],
+                            k: int) -> List[Tuple[Dict, float]]:
+        """
+        Evaluate top-k candidates selected by scoring network.
 
-        if len(self.agent_starts) == 0:
-            # Random agent placement
-            self._place_random_agents()
+        Args:
+            floor_plan: Base floor plan
+            candidates: List of (door_config, predicted_score) tuples
+            k: Number of top candidates to validate
 
-        if len(self.fire_starts) == 0:
-            # Random fire placement
-            self._place_random_fires()
+        Returns:
+            List of (door_config, simulator_score) for top-k
+        """
+        # Sort by predicted score and take top-k
+        sorted_candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:k]
 
-        # Run simulation
-        sim = FastEvacuationSim(
-            grid=self.grid,
-            agent_starts=self.agent_starts,
-            exits=self.exits,
-            fire_starts=self.fire_starts
-        )
+        # Validate with full Monte Carlo
+        validated = []
+        for door_config, pred_score in sorted_candidates:
+            result = self.evaluate_candidate(floor_plan, door_config)
+            sim_score = self._compute_score(result)
+            validated.append((door_config, sim_score))
 
-        result = sim.run(max_steps=200)
+        return validated
 
-        info = {
-            'evacuated': result.evacuated,
-            'stuck': result.stuck,
-            'dead': result.dead,
-            'steps': result.steps,
-            'survival_rate': result.survival_rate
+    def _sample_pairs(self, candidates, num_pairs, strategy):
+        """Sample pairs using specified strategy."""
+        import random
+
+        pairs = []
+        if strategy == 'random':
+            # Pure random sampling
+            for _ in range(num_pairs):
+                a, b = random.sample(candidates, 2)
+                pairs.append((a, b))
+
+        elif strategy == 'hard':
+            # Sample pairs with similar predicted scores (requires model predictions)
+            # For now, default to random
+            for _ in range(num_pairs):
+                a, b = random.sample(candidates, 2)
+                pairs.append((a, b))
+
+        elif strategy == 'mixed':
+            # 70% random, 30% hard pairs
+            num_random = int(num_pairs * 0.7)
+            num_hard = num_pairs - num_random
+
+            for _ in range(num_random):
+                a, b = random.sample(candidates, 2)
+                pairs.append((a, b))
+
+            for _ in range(num_hard):
+                a, b = random.sample(candidates, 2)
+                pairs.append((a, b))
+
+        return pairs
+
+    def _build_simulation(self, floor_plan, door_config, seed):
+        """Build simulation from floor plan and door config."""
+        from simulation import EvacuationSimulation, SimulationConfig
+        import numpy as np
+
+        config_dict = self.config_template.copy()
+        config_dict['initial_fire_map'] = floor_plan.tolist()
+        config_dict['door_configs'] = door_config
+
+        if seed is not None:
+            np.random.seed(seed)
+
+        config = SimulationConfig.from_json(config_dict)
+        return EvacuationSimulation(config)
+
+    def _aggregate_results(self, results):
+        """Aggregate trial results using median."""
+        evacuated = np.median([r.evacuated for r in results])
+        steps = np.median([r.steps for r in results])
+        stuck = np.median([r.stuck for r in results])
+        dead = np.median([r.dead for r in results])
+
+        total = results[0].num_agents if hasattr(results[0], 'num_agents') else 1
+
+        return {
+            'evacuated': int(evacuated),
+            'stuck': int(stuck),
+            'dead': int(dead),
+            'steps': int(steps),
+            'survival_rate': evacuated / total if total > 0 else 0
         }
 
-        return self._get_state(), result.reward, True, info
+    def _compute_score(self, result):
+        """Compute simulator score from metrics."""
+        # Survival rate minus time penalty
+        return result['survival_rate'] - (result['steps'] / 1000)
 
-    def _get_state(self) -> np.ndarray:
-        """Get current state representation."""
-        # Stack channels: walls, exits, agents, fires
-        state = np.zeros((4, self.rows, self.cols), dtype=np.float32)
-        state[0] = (self.grid == -2).astype(np.float32)  # Walls
+    def log_evaluation(self, floor_plan, door_config, model_score, sim_score):
+        """Log candidate evaluation for later analysis."""
+        # Log to file for correlation analysis and fine-tuning
+        import json
+        import time
 
-        for x, y in self.exits:
-            state[1, y, x] = 1.0
-        for x, y in self.agent_starts:
-            state[2, y, x] = 1.0
-        for x, y in self.fire_starts:
-            state[3, y, x] = 1.0
+        log_entry = {
+            'timestamp': time.time(),
+            'floor_plan_hash': hash(floor_plan.tobytes()),
+            'door_config': door_config,
+            'model_score': float(model_score),
+            'sim_score': float(sim_score)
+        }
 
-        return state
-
-    def _place_random_agents(self):
-        """Place agents randomly on empty cells."""
-        empty = np.where(self.grid == 0)
-        indices = np.random.choice(len(empty[0]),
-                                   min(self.num_agents, len(empty[0])),
-                                   replace=False)
-        self.agent_starts = [(empty[1][i], empty[0][i]) for i in indices]
-
-    def _place_random_fires(self):
-        """Place fires randomly on empty cells."""
-        empty = np.where(self.grid == 0)
-        if len(empty[0]) > self.num_fires:
-            indices = np.random.choice(len(empty[0]), self.num_fires, replace=False)
-            self.fire_starts = [(empty[1][i], empty[0][i]) for i in indices]
-
-    def render(self) -> str:
-        """Simple text rendering."""
-        chars = {-2: '#', 0: '.'}
-        lines = []
-        for y in range(self.rows):
-            row = ''
-            for x in range(self.cols):
-                if (x, y) in self.exits:
-                    row += 'E'
-                elif (x, y) in self.agent_starts:
-                    row += 'A'
-                elif (x, y) in self.fire_starts:
-                    row += 'F'
-                else:
-                    row += chars.get(self.grid[y, x], '.')
-            lines.append(row)
-        return '\n'.join(lines)
+        with open('candidate_evaluations.jsonl', 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
 ```
 
 ### Expected Results - Phase 2
@@ -1382,478 +1469,381 @@ def simulate_evacuation_jit(grid: np.ndarray,
     return (evacuated, stuck, dead, step + 1)
 ```
 
-### 3.2 Neural Surrogate Model
+### 3.2 Scoring Network Integration Points
 
-Create `surrogate_model.py`:
+The scoring network (CNN + optional GNN) is trained externally using pairwise labels from the simulator. The simulator provides integration points:
 
 ```python
 """
-Neural Surrogate Model for Floor Plan Evaluation
-=================================================
+Scoring Network Integration
+============================
 
-Train a CNN to predict evacuation metrics directly from floor plan images.
-1000x faster than simulation once trained.
+Integration points for external scoring network (trained on pairwise comparisons).
 """
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
-from typing import Tuple, List, Dict
+from typing import List, Dict, Tuple
 
-class FloorPlanCNN(nn.Module):
+class ScoringNetworkPlugin:
     """
-    CNN to predict evacuation metrics from floor plan.
+    Plugin interface for scoring network inference.
 
-    Input: (batch, 4, H, W) - channels: walls, exits, agents, fires
-    Output: (batch, 4) - [evacuation_rate, avg_time, stuck_rate, death_rate]
-    """
-
-    def __init__(self, grid_size: int = 30):
-        super().__init__()
-
-        self.conv = nn.Sequential(
-            # First block: 4 -> 32 channels
-            nn.Conv2d(4, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            # Second block: 32 -> 64 channels
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            # Third block: 64 -> 128 channels
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d(4),  # Output: (batch, 128, 4, 4)
-        )
-
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * 16, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, 4),  # 4 output metrics
-            nn.Sigmoid()  # All outputs in [0, 1]
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv(x)
-        x = self.fc(x)
-        return x
-
-
-class SurrogateTrainer:
-    """
-    Train surrogate model on simulation data.
+    The scoring network is trained externally using pairwise labels
+    generated by the simulator. This interface allows the network
+    to be plugged into the search/inference pipeline.
     """
 
-    def __init__(self, grid_size: int = 30, device: str = 'cuda'):
-        self.device = device if torch.cuda.is_available() else 'cpu'
-        self.model = FloorPlanCNN(grid_size).to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
-        self.criterion = nn.MSELoss()
+    def __init__(self, model_path: str = None, device: str = 'cpu'):
+        """
+        Initialize scoring network.
 
-    def train_epoch(self, dataloader) -> float:
-        """Train for one epoch."""
-        self.model.train()
-        total_loss = 0
+        Args:
+            model_path: Path to trained model checkpoint
+            device: 'cpu' or 'cuda'
+        """
+        self.device = device
+        self.model = None
 
-        for batch_x, batch_y in dataloader:
-            batch_x = batch_x.to(self.device)
-            batch_y = batch_y.to(self.device)
+        if model_path:
+            self.load_model(model_path)
 
-            self.optimizer.zero_grad()
-            pred = self.model(batch_x)
-            loss = self.criterion(pred, batch_y)
-            loss.backward()
-            self.optimizer.step()
+    def load_model(self, model_path: str):
+        """Load trained scoring network."""
+        import torch
 
-            total_loss += loss.item()
-
-        return total_loss / len(dataloader)
-
-    def evaluate(self, dataloader) -> Dict[str, float]:
-        """Evaluate model."""
+        # Load model architecture and weights
+        # This is implemented by the ML team
+        self.model = torch.load(model_path, map_location=self.device)
         self.model.eval()
-        total_loss = 0
-        all_preds = []
-        all_targets = []
 
+    def score_candidate(self, floor_plan: np.ndarray, door_config: Dict) -> float:
+        """
+        Score a single door configuration candidate.
+
+        Args:
+            floor_plan: 2D array with walls
+            door_config: Door configuration dict
+
+        Returns:
+            Scalar score (higher = better predicted performance)
+        """
+        if self.model is None:
+            raise ValueError("Model not loaded")
+
+        import torch
+
+        # Convert to model input format
+        input_tensor = self._prepare_input(floor_plan, door_config)
+
+        # Run inference
         with torch.no_grad():
-            for batch_x, batch_y in dataloader:
-                batch_x = batch_x.to(self.device)
-                batch_y = batch_y.to(self.device)
+            score = self.model(input_tensor)
 
-                pred = self.model(batch_x)
-                loss = self.criterion(pred, batch_y)
-                total_loss += loss.item()
+        return float(score.item())
 
-                all_preds.append(pred.cpu().numpy())
-                all_targets.append(batch_y.cpu().numpy())
+    def score_batch(self, floor_plan: np.ndarray, door_configs: List[Dict]) -> np.ndarray:
+        """
+        Score multiple candidates in batch (faster).
 
-        preds = np.concatenate(all_preds)
-        targets = np.concatenate(all_targets)
+        Args:
+            floor_plan: Base floor plan
+            door_configs: List of door configurations
 
-        return {
-            'loss': total_loss / len(dataloader),
-            'mae': np.mean(np.abs(preds - targets)),
-            'correlation': np.corrcoef(preds.flatten(), targets.flatten())[0, 1]
-        }
+        Returns:
+            Array of scores
+        """
+        if self.model is None:
+            raise ValueError("Model not loaded")
 
-    def predict(self, floor_plan: np.ndarray) -> np.ndarray:
-        """Predict metrics for single floor plan."""
-        self.model.eval()
+        import torch
+
+        # Prepare batch
+        inputs = torch.stack([
+            self._prepare_input(floor_plan, cfg)
+            for cfg in door_configs
+        ])
+
+        # Batch inference
         with torch.no_grad():
-            x = torch.FloatTensor(floor_plan).unsqueeze(0).to(self.device)
-            pred = self.model(x)
-            return pred.cpu().numpy()[0]
+            scores = self.model(inputs)
 
-    def save(self, path: str):
-        """Save model."""
-        torch.save(self.model.state_dict(), path)
+        return scores.cpu().numpy()
 
-    def load(self, path: str):
-        """Load model."""
-        self.model.load_state_dict(torch.load(path, map_location=self.device))
+    def _prepare_input(self, floor_plan, door_config):
+        """Convert floor plan + door config to model input tensor."""
+        import torch
+
+        # Create 4-channel input: walls, doors, exits, connectivity
+        # This format matches the training data
+        rows, cols = floor_plan.shape
+        input_tensor = torch.zeros((4, rows, cols), dtype=torch.float32)
+
+        # Channel 0: Walls
+        input_tensor[0] = torch.from_numpy((floor_plan == -2).astype(np.float32))
+
+        # Channel 1: Doors
+        for door in door_config:
+            pos = door['position']  # "x5y3" format
+            x = int(pos.split('y')[0][1:])
+            y = int(pos.split('y')[1])
+            input_tensor[1, y, x] = 1.0
+
+        # Channel 2: Exits (from door types)
+        for door in door_config:
+            if door.get('type') == 'exit':
+                pos = door['position']
+                x = int(pos.split('y')[0][1:])
+                y = int(pos.split('y')[1])
+                input_tensor[2, y, x] = 1.0
+
+        # Channel 3: Optional connectivity/adjacency features
+        # (can be computed from door graph if using GNN fusion)
+
+        return input_tensor.unsqueeze(0).to(self.device)
 
 
-def generate_training_data(num_samples: int = 10000,
-                           grid_size: int = 30,
-                           num_agents: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+def generate_training_labels(simulator_interface,
+                            floor_plans: List[np.ndarray],
+                            candidates_per_plan: int = 50,
+                            pairs_per_plan: int = 100,
+                            output_path: str = 'pairwise_labels.jsonl') -> Dict:
     """
-    Generate training data by running simulations.
+    Generate pairwise training labels for scoring network.
+
+    Args:
+        simulator_interface: ScoringNetworkInterface instance
+        floor_plans: List of base floor plans
+        candidates_per_plan: Number of door configs to generate per plan
+        pairs_per_plan: Number of pairs to sample per plan
+        output_path: Where to save labels
 
     Returns:
-        X: (num_samples, 4, grid_size, grid_size) floor plans
-        y: (num_samples, 4) metrics [evac_rate, avg_time, stuck_rate, death_rate]
+        Statistics about label generation
     """
-    from fast_simulation import FastEvacuationSim
+    import json
+    from candidate_generator import generate_door_candidates  # Implemented separately
 
-    X = np.zeros((num_samples, 4, grid_size, grid_size), dtype=np.float32)
-    y = np.zeros((num_samples, 4), dtype=np.float32)
+    total_labels = 0
+    ambiguous_count = 0
 
-    for i in range(num_samples):
-        # Generate random floor plan
-        grid = np.zeros((grid_size, grid_size), dtype=np.float32)
+    with open(output_path, 'w') as f:
+        for plan_idx, floor_plan in enumerate(floor_plans):
+            # Generate candidate pool
+            candidates = generate_door_candidates(
+                floor_plan,
+                num_candidates=candidates_per_plan
+            )
 
-        # Random walls (10-30% of cells)
-        num_walls = np.random.randint(grid_size * grid_size // 10,
-                                       grid_size * grid_size // 3)
-        wall_indices = np.random.choice(grid_size * grid_size, num_walls, replace=False)
-        for idx in wall_indices:
-            grid[idx // grid_size, idx % grid_size] = -2
+            # Generate pairwise labels
+            labels = simulator_interface.generate_candidate_labels(
+                floor_plan,
+                candidates,
+                num_pairs=pairs_per_plan,
+                pair_selection='mixed'
+            )
 
-        # Random exits (1-3)
-        num_exits = np.random.randint(1, 4)
-        empty_cells = np.where(grid == 0)
-        exit_indices = np.random.choice(len(empty_cells[0]), num_exits, replace=False)
-        exits = [(empty_cells[1][j], empty_cells[0][j]) for j in exit_indices]
+            # Save labels
+            for config_a, config_b, label, score_a, score_b in labels:
+                if label is not None:
+                    entry = {
+                        'floor_plan_id': plan_idx,
+                        'config_a': config_a,
+                        'config_b': config_b,
+                        'label': label,
+                        'score_a': score_a,
+                        'score_b': score_b
+                    }
+                    f.write(json.dumps(entry) + '\n')
+                    total_labels += 1
+                else:
+                    ambiguous_count += 1
 
-        # Random agents
-        empty_cells = np.where(grid == 0)
-        agent_indices = np.random.choice(len(empty_cells[0]),
-                                         min(num_agents, len(empty_cells[0])),
-                                         replace=False)
-        agents = [(empty_cells[1][j], empty_cells[0][j]) for j in agent_indices]
+            print(f"Generated {total_labels} labels for floor plan {plan_idx + 1}/{len(floor_plans)}")
 
-        # Random fires (1-2)
-        empty_cells = np.where(grid == 0)
-        num_fires = np.random.randint(1, 3)
-        fire_indices = np.random.choice(len(empty_cells[0]),
-                                        min(num_fires, len(empty_cells[0])),
-                                        replace=False)
-        fires = [(empty_cells[1][j], empty_cells[0][j]) for j in fire_indices]
-
-        # Build input tensor
-        X[i, 0] = (grid == -2).astype(np.float32)  # Walls
-        for ex, ey in exits:
-            X[i, 1, ey, ex] = 1.0  # Exits
-        for ax, ay in agents:
-            X[i, 2, ay, ax] = 1.0  # Agents
-        for fx, fy in fires:
-            X[i, 3, fy, fx] = 1.0  # Fires
-
-        # Run simulation
-        try:
-            sim = FastEvacuationSim(grid, agents, exits, fires)
-            result = sim.run(max_steps=200)
-
-            total = len(agents)
-            y[i, 0] = result.evacuated / total  # Evacuation rate
-            y[i, 1] = result.steps / 200  # Normalized time
-            y[i, 2] = result.stuck / total  # Stuck rate
-            y[i, 3] = result.dead / total  # Death rate
-        except:
-            # Invalid configuration, use worst case
-            y[i] = [0, 1, 0.5, 0.5]
-
-        if (i + 1) % 1000 == 0:
-            print(f"Generated {i + 1}/{num_samples} samples")
-
-    return X, y
+    return {
+        'total_labels': total_labels,
+        'ambiguous_discarded': ambiguous_count,
+        'label_rate': total_labels / (total_labels + ambiguous_count)
+    }
 ```
 
-### 3.3 Multi-Fidelity Evaluation
+### 3.3 AI-Guided Search Pipeline
 
-Create `multi_fidelity.py`:
+Create `ai_search_pipeline.py`:
 
 ```python
 """
-Multi-Fidelity Floor Plan Evaluation
-====================================
+AI-Guided Door Configuration Search
+===================================
 
-Use cheap approximations first, expensive simulations only for promising designs.
-Reduces average evaluation time by 10-100x.
+Use scoring network to narrow candidate pool before expensive simulator validation.
+Reduces simulator calls by 10-100x while finding top designs.
 """
 
 import numpy as np
-from typing import Tuple, Dict, Optional
+from typing import List, Dict, Tuple
 from dataclasses import dataclass
 
 @dataclass
-class EvalResult:
-    """Multi-fidelity evaluation result."""
-    reward: float
-    metrics: Dict[str, float]
-    fidelity_level: str
-    eval_time: float
+class SearchResult:
+    """Search result with AI and simulator metrics."""
+    door_config: Dict
+    model_score: float
+    simulator_score: float
+    rank_by_model: int
+    rank_by_simulator: int
+    simulator_metrics: Dict
 
-class MultiFidelityEvaluator:
+class AIGuidedSearch:
     """
-    Progressive floor plan evaluation.
+    AI-guided search for optimal door configurations.
 
-    Levels:
-    1. Heuristic score (0.0001s) - Quick rejection of obviously bad designs
-    2. Neural surrogate (0.001s) - Learned approximation
-    3. Fast simulation (0.05s) - Simplified physics
-    4. Full simulation (0.5s) - Complete D* Lite + realistic fire
+    Pipeline:
+    1. Generate large candidate pool (N_large = 1000-10000)
+    2. Score all candidates with fast neural network
+    3. Select top-k by model score (k = 10-50)
+    4. Validate top-k with full Monte Carlo simulator
+    5. Return validated top designs
+
+    Speedup: Only k simulator calls instead of N_large
     """
 
     def __init__(self,
-                 surrogate_model=None,
-                 fast_sim_class=None,
-                 full_sim_class=None):
-        self.surrogate = surrogate_model
-        self.fast_sim = fast_sim_class
-        self.full_sim = full_sim_class
-
-        # Thresholds for progressive evaluation
-        self.heuristic_threshold = 0.3
-        self.surrogate_threshold = 0.5
-        self.fast_sim_threshold = 0.7
-
-    def evaluate(self, floor_plan: np.ndarray,
-                 agent_positions: list,
-                 exit_positions: list,
-                 fire_positions: list = None,
-                 max_fidelity: str = 'full') -> EvalResult:
+                 scoring_network,
+                 simulator_interface,
+                 top_k: int = 20):
         """
-        Evaluate floor plan with progressive fidelity.
+        Initialize search pipeline.
 
         Args:
-            floor_plan: 2D numpy array
-            agent_positions: List of (x, y)
-            exit_positions: List of (x, y)
-            fire_positions: List of (x, y)
-            max_fidelity: Maximum fidelity level to use
+            scoring_network: ScoringNetworkPlugin instance
+            simulator_interface: ScoringNetworkInterface instance
+            top_k: Number of candidates to validate with simulator
+        """
+        self.scorer = scoring_network
+        self.simulator = simulator_interface
+        self.top_k = top_k
+
+    def search(self,
+               floor_plan: np.ndarray,
+               candidate_pool: List[Dict],
+               log_results: bool = True) -> List[SearchResult]:
+        """
+        Search for best door configurations using AI pre-screening.
+
+        Args:
+            floor_plan: Base floor plan (walls)
+            candidate_pool: Large pool of door configurations (N_large)
+            log_results: Whether to log model vs simulator scores
 
         Returns:
-            EvalResult with metrics and fidelity level used
+            List of SearchResult objects sorted by simulator score
         """
         import time
 
-        # Level 1: Heuristic score (~0.0001s)
+        print(f"Searching {len(candidate_pool)} candidates with AI guidance...")
+
+        # Step 1: Score all candidates with neural network (fast)
         start = time.time()
-        heuristic = self._heuristic_score(floor_plan, agent_positions,
-                                          exit_positions, fire_positions)
-        heuristic_time = time.time() - start
+        model_scores = self.scorer.score_batch(floor_plan, candidate_pool)
+        model_time = time.time() - start
 
-        if heuristic < self.heuristic_threshold:
-            return EvalResult(
-                reward=heuristic * 10 - 50,  # Negative reward for bad heuristic
-                metrics={'heuristic': heuristic},
-                fidelity_level='heuristic',
-                eval_time=heuristic_time
+        print(f"  Model scoring: {model_time:.2f}s ({len(candidate_pool)/model_time:.0f} candidates/sec)")
+
+        # Step 2: Select top-k by model score
+        top_k_indices = np.argsort(model_scores)[-self.top_k:][::-1]
+        top_k_candidates = [(candidate_pool[i], model_scores[i]) for i in top_k_indices]
+
+        print(f"  Selected top-{self.top_k} candidates for validation")
+
+        # Step 3: Validate with full simulator
+        start = time.time()
+        validated_results = []
+
+        for rank, (door_config, model_score) in enumerate(top_k_candidates):
+            result = self.simulator.evaluate_candidate(floor_plan, door_config, num_trials=5)
+            sim_score = result['survival_rate'] - result['steps'] / 1000
+
+            search_result = SearchResult(
+                door_config=door_config,
+                model_score=float(model_score),
+                simulator_score=float(sim_score),
+                rank_by_model=rank + 1,
+                rank_by_simulator=-1,  # Will be set after sorting
+                simulator_metrics=result
             )
+            validated_results.append(search_result)
 
-        if max_fidelity == 'heuristic':
-            return EvalResult(
-                reward=heuristic * 10,
-                metrics={'heuristic': heuristic},
-                fidelity_level='heuristic',
-                eval_time=heuristic_time
-            )
+            # Log for correlation analysis
+            if log_results:
+                self.simulator.log_evaluation(floor_plan, door_config, model_score, sim_score)
 
-        # Level 2: Neural surrogate (~0.001s)
-        if self.surrogate is not None:
-            start = time.time()
-            surrogate_pred = self._surrogate_predict(floor_plan, agent_positions,
-                                                     exit_positions, fire_positions)
-            surrogate_time = time.time() - start
+        sim_time = time.time() - start
+        print(f"  Simulator validation: {sim_time:.2f}s ({self.top_k/sim_time:.1f} candidates/sec)")
 
-            if surrogate_pred['survival_rate'] < self.surrogate_threshold:
-                return EvalResult(
-                    reward=self._compute_reward(surrogate_pred),
-                    metrics=surrogate_pred,
-                    fidelity_level='surrogate',
-                    eval_time=heuristic_time + surrogate_time
-                )
+        # Step 4: Sort by simulator score and assign ranks
+        validated_results.sort(key=lambda x: x.simulator_score, reverse=True)
+        for rank, result in enumerate(validated_results):
+            result.rank_by_simulator = rank + 1
 
-            if max_fidelity == 'surrogate':
-                return EvalResult(
-                    reward=self._compute_reward(surrogate_pred),
-                    metrics=surrogate_pred,
-                    fidelity_level='surrogate',
-                    eval_time=heuristic_time + surrogate_time
-                )
+        # Print speedup statistics
+        total_time = model_time + sim_time
+        naive_time_estimate = len(candidate_pool) * (sim_time / self.top_k)
+        speedup = naive_time_estimate / total_time
 
-        # Level 3: Fast simulation (~0.05s)
-        if self.fast_sim is not None:
-            start = time.time()
-            fast_result = self._run_fast_sim(floor_plan, agent_positions,
-                                             exit_positions, fire_positions)
-            fast_time = time.time() - start
+        print(f"\n  Total time: {total_time:.2f}s")
+        print(f"  Estimated naive time: {naive_time_estimate:.1f}s")
+        print(f"  Speedup: {speedup:.1f}x")
+        print(f"  Sim calls saved: {len(candidate_pool) - self.top_k} ({100*(1-self.top_k/len(candidate_pool)):.1f}%)")
 
-            if fast_result['survival_rate'] < self.fast_sim_threshold:
-                return EvalResult(
-                    reward=self._compute_reward(fast_result),
-                    metrics=fast_result,
-                    fidelity_level='fast',
-                    eval_time=heuristic_time + fast_time
-                )
+        return validated_results
 
-            if max_fidelity == 'fast':
-                return EvalResult(
-                    reward=self._compute_reward(fast_result),
-                    metrics=fast_result,
-                    fidelity_level='fast',
-                    eval_time=heuristic_time + fast_time
-                )
+    def evaluate_search_quality(self,
+                               floor_plan: np.ndarray,
+                               candidate_pool: List[Dict],
+                               num_validate: int = 100) -> Dict:
+        """
+        Evaluate how well AI selects top candidates.
 
-        # Level 4: Full simulation (~0.5s)
-        if self.full_sim is not None:
-            start = time.time()
-            full_result = self._run_full_sim(floor_plan, agent_positions,
-                                             exit_positions, fire_positions)
-            full_time = time.time() - start
+        Args:
+            floor_plan: Base floor plan
+            candidate_pool: Candidate pool
+            num_validate: Number of random candidates to validate for comparison
 
-            return EvalResult(
-                reward=self._compute_reward(full_result),
-                metrics=full_result,
-                fidelity_level='full',
-                eval_time=heuristic_time + full_time
-            )
+        Returns:
+            Quality metrics (Spearman correlation, top-k recall)
+        """
+        import time
+        from scipy.stats import spearmanr
 
-        # Fallback to fast result or heuristic
-        return EvalResult(
-            reward=heuristic * 10,
-            metrics={'heuristic': heuristic},
-            fidelity_level='heuristic',
-            eval_time=heuristic_time
-        )
+        # Score all with model
+        model_scores = self.scorer.score_batch(floor_plan, candidate_pool)
 
-    def _heuristic_score(self, floor_plan, agents, exits, fires) -> float:
-        """Quick heuristic evaluation."""
-        score = 1.0
+        # Validate a random sample with simulator
+        sample_indices = np.random.choice(len(candidate_pool), num_validate, replace=False)
+        sim_scores = []
 
-        # Penalize if no exits
-        if not exits:
-            return 0.0
+        for idx in sample_indices:
+            result = self.simulator.evaluate_candidate(floor_plan, candidate_pool[idx], num_trials=3)
+            sim_score = result['survival_rate'] - result['steps'] / 1000
+            sim_scores.append(sim_score)
 
-        # Penalize if exits blocked
-        for ex, ey in exits:
-            if floor_plan[ey, ex] != 0:
-                score -= 0.2
+        sample_model_scores = model_scores[sample_indices]
 
-        # Check path existence (simple flood fill)
-        for ax, ay in agents:
-            if not self._path_exists(floor_plan, (ax, ay), exits[0]):
-                score -= 0.3
+        # Compute correlation
+        spearman_corr, p_value = spearmanr(sample_model_scores, sim_scores)
 
-        # Penalize high wall density
-        wall_ratio = np.sum(floor_plan == -2) / floor_plan.size
-        if wall_ratio > 0.4:
-            score -= 0.2
+        # Compute top-k recall
+        true_top_k = set(np.argsort(sim_scores)[-self.top_k:])
+        pred_top_k = set(np.argsort(sample_model_scores)[-self.top_k:])
+        top_k_recall = len(true_top_k & pred_top_k) / self.top_k
 
-        return max(0.0, score)
-
-    def _path_exists(self, grid, start, goal) -> bool:
-        """Simple BFS to check if path exists."""
-        from collections import deque
-
-        rows, cols = grid.shape
-        visited = set()
-        queue = deque([start])
-        visited.add(start)
-
-        while queue:
-            x, y = queue.popleft()
-            if (x, y) == goal:
-                return True
-
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nx, ny = x + dx, y + dy
-                if (0 <= nx < cols and 0 <= ny < rows and
-                    (nx, ny) not in visited and grid[ny, nx] >= 0):
-                    visited.add((nx, ny))
-                    queue.append((nx, ny))
-
-        return False
-
-    def _surrogate_predict(self, floor_plan, agents, exits, fires) -> dict:
-        """Get surrogate model prediction."""
-        # Build input tensor
-        state = np.zeros((4, floor_plan.shape[0], floor_plan.shape[1]), dtype=np.float32)
-        state[0] = (floor_plan == -2)
-        for x, y in exits:
-            state[1, y, x] = 1.0
-        for x, y in agents:
-            state[2, y, x] = 1.0
-        if fires:
-            for x, y in fires:
-                state[3, y, x] = 1.0
-
-        pred = self.surrogate.predict(state)
         return {
-            'survival_rate': pred[0],
-            'avg_time': pred[1] * 200,
-            'stuck_rate': pred[2],
-            'death_rate': pred[3]
+            'spearman_correlation': spearman_corr,
+            'p_value': p_value,
+            'top_k_recall': top_k_recall,
+            'num_validated': num_validate
         }
-
-    def _run_fast_sim(self, floor_plan, agents, exits, fires) -> dict:
-        """Run fast simulation."""
-        sim = self.fast_sim(floor_plan, agents, exits, fires)
-        result = sim.run(max_steps=200)
-        return {
-            'survival_rate': result.survival_rate,
-            'avg_time': result.avg_evacuation_time,
-            'stuck_rate': result.stuck / len(agents),
-            'death_rate': result.dead / len(agents)
-        }
-
-    def _run_full_sim(self, floor_plan, agents, exits, fires) -> dict:
-        """Run full simulation."""
-        # Convert to full simulation format
-        from simulation import EvacuationSimulation, SimulationConfig
-        # ... implementation
-        pass
-
-    def _compute_reward(self, metrics: dict) -> float:
-        """Compute RL reward from metrics."""
-        return (
-            metrics.get('survival_rate', 0) * 100 +
-            metrics.get('stuck_rate', 0) * -30 +
-            metrics.get('death_rate', 0) * -50 +
-            (200 - metrics.get('avg_time', 200)) * 0.1
-        )
 ```
 
 ### Expected Results - Phase 3
@@ -1868,75 +1858,122 @@ class MultiFidelityEvaluator:
 
 ## Implementation Roadmap
 
-### Week 1-2: Phase 1 (Conservative)
-- [x] Create `configs/rl_training_config.json`
+### Week 1-2: Phase 1 (Conservative - Simulator Optimization)
+- [x] Create `configs/ai_labeling_config.json`
 - [x] Add early termination to `simulation.py`
-- [x] Create `rl_simulation.py` wrapper
-- [x] Benchmark: Target 6,000+ sims/hour
+- [x] Create `ai_labeling_wrapper.py` with pairwise comparison methods
+- [x] Benchmark: Target 6,000+ sims/hour for label generation
+- [ ] Implement candidate generator (random/rule-based door placement)
 
-### Week 3-4: Phase 2 (Moderate)
-- [ ] Implement `fast_pathfinder.py`
-- [ ] Implement `fast_fire.py`
-- [ ] Implement `fast_simulation.py`
-- [ ] Create `rl_interface.py`
+### Week 3-4: Phase 2 (Moderate - Fast Labeling Pipeline)
+- [ ] Implement `fast_pathfinder.py` (A* for faster evaluations)
+- [ ] Implement `fast_fire.py` (vectorized fire model)
+- [ ] Implement `fast_simulation.py` (lightweight eval)
+- [ ] Create `pairwise_ranking_interface.py`
+- [ ] Generate initial training dataset (5K-10K pairs)
 - [ ] Benchmark: Target 50,000+ sims/hour
 
-### Month 2: Phase 3 (Aggressive)
-- [ ] Implement `jit_pathfinder.py` with Numba
-- [ ] Generate training data for surrogate
-- [ ] Train `surrogate_model.py`
-- [ ] Implement `multi_fidelity.py`
-- [ ] Benchmark: Target 500,000+ sims/hour
+### Week 5-6: Phase 3 (AI Integration - Model Training & Search)
+- [ ] Train scoring network (CNN + optional GNN) on pairwise labels
+  - ML team implements model architecture
+  - Train with pairwise loss (logistic/hinge)
+  - Monitor Spearman correlation and top-k recall
+- [ ] Implement `scoring_network_plugin.py` (inference interface)
+- [ ] Implement `ai_search_pipeline.py` (top-k selection + validation)
+- [ ] Benchmark: Target 10-100x speedup via AI pre-screening
 
-### Month 3: Integration & Tuning
-- [ ] Integrate with RL framework (Stable Baselines3 / RLlib)
-- [ ] Implement curriculum learning
-- [ ] Tune surrogate model accuracy
-- [ ] Production deployment
+### Week 7-8: Evaluation & Dashboard
+- [ ] Implement evaluation metrics (Spearman, top-k recall, sim calls saved)
+- [ ] Create dashboard with:
+  - Scatter plot: model score vs simulator score
+  - Ranking metrics visualization
+  - Case studies: random vs AI-selected layouts
+- [ ] Generate "AI suggested" designs for demo
+- [ ] Production deployment & documentation
 
 ---
 
 ## Quick Start
 
-### Immediate (Today)
+### Immediate (Today) - Simulator Optimization
 ```bash
-# Use aggressive config
-cp configs/rl_training_config.json configs/my_config.json
+# Use optimized config for fast labeling
+cp configs/ai_labeling_config.json configs/my_config.json
 python simulation.py --config configs/my_config.json
 ```
 
-### This Week
+### Week 1-2 - Generate Pairwise Labels
 ```python
-# Use fast simulation wrapper
-from rl_simulation import RLSimulationWrapper
+# Generate pairwise comparison labels for training
+from ai_labeling_wrapper import AILabelingWrapper
+from candidate_generator import generate_door_candidates  # To be implemented
 
-env = RLSimulationWrapper()
-result = env.evaluate(
-    floor_plan=my_design,
-    agent_positions=[(5, 5), (10, 10)],
-    exit_positions=[(0, 15), (29, 15)]
-)
-print(f"Reward: {result['reward']}")
+# Initialize wrapper
+labeler = AILabelingWrapper(base_config_path='configs/ai_labeling_config.json')
+
+# Generate candidates for a floor plan
+floor_plan = ...  # 2D numpy array
+candidates = generate_door_candidates(floor_plan, num_candidates=100)
+
+# Generate pairwise labels
+pairs = [(candidates[i], candidates[j]) for i in range(0, 100, 2) for j in range(i+1, min(i+10, 100))]
+labels = labeler.generate_pairwise_labels(floor_plan, pairs, num_trials=3, margin=0.05)
+
+# Labels format: (config_a, config_b, label, score_a, score_b)
+print(f"Generated {len([l for l in labels if l[2] is not None])} valid labels")
 ```
 
-### This Month
+### Week 3-4 - Fast Labeling at Scale
 ```python
-# Use multi-fidelity evaluation
-from multi_fidelity import MultiFidelityEvaluator
-from surrogate_model import SurrogateTrainer
+# Generate large training dataset efficiently
+from pairwise_ranking_interface import ScoringNetworkInterface
 
-# Train surrogate on 10k simulations
-trainer = SurrogateTrainer()
-# ... training code ...
-
-evaluator = MultiFidelityEvaluator(
-    surrogate_model=trainer,
-    fast_sim_class=FastEvacuationSim
+interface = ScoringNetworkInterface(
+    grid_size=(30, 30),
+    base_config='configs/ai_labeling_config.json',
+    num_trials_per_eval=3
 )
 
-# Evaluate floor plan (uses cheapest sufficient fidelity)
-result = evaluator.evaluate(floor_plan, agents, exits, fires)
-print(f"Reward: {result.reward}, Fidelity: {result.fidelity_level}")
+# Generate many pairwise labels across multiple floor plans
+floor_plans = [...]  # List of floor plan arrays
+labels = generate_training_labels(
+    interface,
+    floor_plans,
+    candidates_per_plan=50,
+    pairs_per_plan=100,
+    output_path='training_labels.jsonl'
+)
+print(f"Generated {labels['total_labels']} pairwise labels")
+```
+
+### Week 5+ - AI-Guided Search
+```python
+# Use trained scoring network to accelerate search
+from scoring_network_plugin import ScoringNetworkPlugin
+from ai_search_pipeline import AIGuidedSearch
+from pairwise_ranking_interface import ScoringNetworkInterface
+
+# Load trained model
+scorer = ScoringNetworkPlugin(model_path='models/scoring_network.pt')
+simulator = ScoringNetworkInterface()
+
+# Create search pipeline
+search = AIGuidedSearch(
+    scoring_network=scorer,
+    simulator_interface=simulator,
+    top_k=20  # Only validate top-20 by model score
+)
+
+# Search for best door configuration
+floor_plan = ...
+candidates = generate_door_candidates(floor_plan, num_candidates=1000)
+results = search.search(floor_plan, candidates)
+
+# Best design found
+best = results[0]
+print(f"Best design: {best.door_config}")
+print(f"Simulator score: {best.simulator_score:.3f}")
+print(f"Validated only {len(results)} out of {len(candidates)} candidates")
 ```
 
 ---
@@ -1963,13 +2000,26 @@ pip install jax jaxlib   # Optional GPU acceleration
 ## FAQ
 
 **Q: Which phase should I start with?**
-A: Start with Phase 1 immediately (1-2 days). The config changes alone provide 3-5x speedup with zero code changes.
+A: Start with Phase 1 immediately (1-2 days). The config changes provide 3-5x speedup for label generation with zero architectural changes. This lets you start collecting pairwise labels right away.
 
-**Q: How accurate is the neural surrogate?**
-A: With 10k training samples, expect 90-95% correlation with full simulation. For RL training, this is sufficient since the policy learns to optimize the surrogate reward.
+**Q: How is this different from RL?**
+A: This uses **pairwise ranking** instead of RL. The simulator generates ground-truth labels comparing pairs of designs (A > B?), and a CNN learns to predict relative quality. This is more robust to noisy simulator outputs and requires less training data than RL policy learning.
+
+**Q: How much training data is needed?**
+A: Start with 5K-10K pairwise comparisons across 10-20 floor plans. With proper data augmentation and mixed sampling (random + hard pairs), this provides good Spearman correlation (0.7-0.9). More data improves correlation but yields diminishing returns.
+
+**Q: How accurate is the scoring network?**
+A: With 10K pairwise labels, expect Spearman correlation of 0.7-0.85 between model scores and simulator scores. Top-k recall (finding true top designs) is typically 60-80% for k=20. This is sufficient for 10-50x search speedup.
 
 **Q: Can I use GPU?**
-A: Yes, Phase 3 supports GPU via PyTorch (surrogate model) and optionally JAX (vectorized fire/pathfinding). Batch evaluation of 1000+ floor plans is 100x faster on GPU.
+A: Yes, the scoring network uses PyTorch and runs efficiently on GPU. Batch inference on 1000 candidates takes <1 second on GPU vs 2-3 seconds on CPU. The simulator still runs on CPU but only validates top-k candidates.
 
 **Q: What about determinism for reproducibility?**
-A: Use `DeterministicFireModel` and set random seeds. The JIT-compiled version is fully deterministic.
+A: Use fixed random seeds for both training data generation and inference. The simulator with `DeterministicFireModel` and seeded numpy ensures reproducible labels. The trained network is deterministic at inference time.
+
+**Q: How do I know if the AI is working?**
+A: Monitor these metrics:
+- **Spearman correlation**: Should be >0.7 after training on 10K pairs
+- **Top-k recall**: Fraction of true top-20 designs found in model's top-20 (target: >60%)
+- **Simulation calls saved**: Should reduce calls by 90-95% (only validate top-k of N_large)
+- **Case studies**: Visual comparison of random vs AI-selected designs

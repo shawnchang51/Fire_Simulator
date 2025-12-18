@@ -491,6 +491,7 @@ def _run_single_simulation(args):
                 'run_number': run_number,
                 '_phase2': True,
                 '_phase2_survival_rate': phase2_result.survival_rate,
+                '_phase2_agent_fire_exposures': phase2_result.agent_fire_exposures,  # Per-agent data
                 '_termination_reason': phase2_result.termination_reason
             }
         else:
@@ -508,6 +509,7 @@ def _run_single_simulation(args):
         # MEMORY OPTIMIZATION: If not saving full results, strip heavy data
         if not save_full_results:
             # Keep only essential statistics, remove trajectories and detailed history
+            # BUT keep per-agent fire damage (very cheap: only ~1.5MB per 1000 runs)
             minimal_result = {
                 'status': result.get('status', 'completed'),
                 'path_count': result.get('path_count', {}),
@@ -517,7 +519,9 @@ def _run_single_simulation(args):
                 'average_avg_temp': result.get('average_avg_temp', 0.0),
                 'evacuated_agents': result.get('evacuated_agents', 0),
                 'survived_agents': result.get('survived_agents', 0),
-                'run_number': run_number
+                'run_number': run_number,
+                # Phase 2 specific: per-agent fire exposures (negligible memory)
+                'agent_fire_exposures': result.get('_phase2_agent_fire_exposures', [])
             }
             # Explicitly delete the full result to free memory
             del result

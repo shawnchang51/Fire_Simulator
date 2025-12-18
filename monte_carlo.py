@@ -476,17 +476,21 @@ def _run_single_simulation(args):
             phase2_result = sim.run(max_steps=500)
 
             # Convert Phase 2 result to original format
+            # Calculate survived_agents (evacuated + stuck, not dead)
+            survived_agents = phase2_result.evacuated + phase2_result.stuck
+
             result = {
                 'status': 'completed',
                 'path_count': {},
                 'steps': phase2_result.steps,
-                'average_fire_damage': 0.0,  # Phase 2 doesn't track this
-                'average_peak_temp': 0.0,    # Phase 2 doesn't track this
-                'average_avg_temp': 0.0,     # Phase 2 doesn't track this
+                'average_fire_damage': phase2_result.avg_fire_damage,  # NOW TRACKED!
+                'average_peak_temp': 0.0,    # Phase 2 doesn't track temperature
+                'average_avg_temp': 0.0,     # Phase 2 doesn't track temperature
                 'evacuated_agents': phase2_result.evacuated,
-                'survived_agents': phase2_result.evacuated,
+                'survived_agents': survived_agents,  # Fixed: evacuated + stuck
                 'run_number': run_number,
                 '_phase2': True,
+                '_phase2_survival_rate': phase2_result.survival_rate,
                 '_termination_reason': phase2_result.termination_reason
             }
         else:

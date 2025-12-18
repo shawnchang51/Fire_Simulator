@@ -17,17 +17,19 @@ from fast_fire import FastFireModel, DeterministicFireModel
 @dataclass
 class FastAgent:
     """Minimal agent state."""
-    __slots__ = ['x', 'y', 'status', 'steps']
+    __slots__ = ['x', 'y', 'status', 'steps', 'fire_damage']
     x: int
     y: int
     status: str  # 'active', 'evacuated', 'stuck', 'dead'
     steps: int
+    fire_damage: float  # Accumulated fire exposure
 
 @dataclass
 class SimResult:
     """Simulation result for RL."""
     __slots__ = ['steps', 'evacuated', 'stuck', 'dead', 'survival_rate',
-                 'avg_evacuation_time', 'reward', 'termination_reason']
+                 'avg_evacuation_time', 'reward', 'termination_reason',
+                 'avg_fire_damage', 'agent_fire_exposures']
     steps: int
     evacuated: int
     stuck: int
@@ -36,6 +38,8 @@ class SimResult:
     avg_evacuation_time: float
     reward: float
     termination_reason: str
+    avg_fire_damage: float
+    agent_fire_exposures: List[float]  # Fire exposure for each agent
 
 
 class FastEvacuationSim:
@@ -76,8 +80,8 @@ class FastEvacuationSim:
                 if 0 <= x < grid.shape[1] and 0 <= y < grid.shape[0]:
                     self.grid[y, x] = 2.0
 
-        # Initialize agents
-        self.agents = [FastAgent(x, y, 'active', 0) for x, y in agent_starts]
+        # Initialize agents with fire damage tracking
+        self.agents = [FastAgent(x, y, 'active', 0, 0.0) for x, y in agent_starts]
         self.exits = set(exits)
         self.exit_list = list(exits)
 
@@ -160,14 +164,19 @@ class FastEvacuationSim:
                 active_count += 1
                 agent.steps += 1
 
+                # Track fire damage at current position
+                fire_intensity = max(0, self.grid[agent.y, agent.x])
+                if fire_intensity > 0:
+                    agent.fire_damage += fire_intensity
+
                 # Check if at exit
                 if (agent.x, agent.y) in self.exits:
                     agent.status = 'evacuated'
                     evacuation_times.append(agent.steps)
                     continue
 
-                # Check if in fire
-                if self.grid[agent.y, agent.x] > 0:
+                # Check if in intense fire (death threshold)
+                if fire_intensity > 3.0:
                     agent.status = 'dead'
                     continue
 
@@ -210,8 +219,15 @@ class FastEvacuationSim:
         dead = sum(1 for a in self.agents if a.status == 'dead')
         total = len(self.agents)
 
+        # Survival = evacuated + stuck (not dead)
+        survived = evacuated + stuck
+        survival_rate = survived / total if total > 0 else 0
+
         avg_time = np.mean(evacuation_times) if evacuation_times else self.step_count
-        survival_rate = evacuated / total if total > 0 else 0
+
+        # Calculate average fire damage across all agents
+        fire_exposures = [a.fire_damage for a in self.agents]
+        avg_fire_damage = np.mean(fire_exposures) if fire_exposures else 0.0
 
         # RL reward calculation
         reward = (
@@ -229,7 +245,9 @@ class FastEvacuationSim:
             survival_rate=survival_rate,
             avg_evacuation_time=avg_time,
             reward=reward,
-            termination_reason=reason
+            termination_reason=reason,
+            avg_fire_damage=avg_fire_damage,
+            agent_fire_exposures=fire_exposures
         )
 
 

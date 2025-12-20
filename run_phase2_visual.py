@@ -395,7 +395,9 @@ def load_config_and_create_sim(config_path: str, fire_spread_mode: str = 'always
         deterministic_fire=False,  # Use stochastic fire for realistic spread
         fire_update_interval=config.fire_update_interval,
         fire_discovery_delay=config.fire_discovery_delay,
-        fire_spread_mode=fire_spread_mode
+        fire_spread_mode=fire_spread_mode,
+        fire_spread_rate=config.fire_spread_rate,
+        fire_intensity_growth=config.fire_intensity_growth
     )
 
     return sim, config

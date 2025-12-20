@@ -472,7 +472,9 @@ def _run_single_simulation(args):
                 deterministic_fire=True,
                 fire_update_interval=config_copy.fire_update_interval,
                 fire_discovery_delay=config_copy.fire_discovery_delay,
-                fire_spread_mode=fire_spread_mode
+                fire_spread_mode=fire_spread_mode,
+                fire_spread_rate=config_copy.fire_spread_rate,
+                fire_intensity_growth=config_copy.fire_intensity_growth
             )
 
             phase2_result = sim.run(max_steps=500)

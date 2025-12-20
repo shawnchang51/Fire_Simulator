@@ -63,7 +63,9 @@ class FastEvacuationSim:
                  deterministic_fire: bool = True,
                  fire_update_interval: int = 4,
                  fire_discovery_delay: int = 0,
-                 fire_spread_mode: str = 'always_real'):
+                 fire_spread_mode: str = 'always_real',
+                 fire_spread_rate: float = 0.3,
+                 fire_intensity_growth: float = 0.5):
         """
         Initialize simulation.
 
@@ -76,6 +78,8 @@ class FastEvacuationSim:
             fire_update_interval: Steps between fire updates
             fire_discovery_delay: Steps of fire-only propagation before agents start moving (discovery time)
             fire_spread_mode: Fire spread behavior - 'always_real', 'real_then_simple', or 'real_then_stop'
+            fire_spread_rate: Probability multiplier for fire spread (0.3=normal, 0.6=aggressive)
+            fire_intensity_growth: How fast fire intensity grows per step (0.5=normal, 1.0=aggressive)
         """
         # Initialize grid with fire
         self.grid = grid.astype(np.float32)
@@ -107,10 +111,15 @@ class FastEvacuationSim:
 
         if deterministic_fire and fire_spread_mode == FireSpreadMode.ALWAYS_REAL:
             # Legacy behavior: deterministic_fire=True uses DeterministicFireModel
-            self.fire = DeterministicFireModel(self.grid)
+            self.fire = DeterministicFireModel(self.grid,
+                                               spread_threshold=fire_spread_rate,
+                                               intensity_growth=fire_intensity_growth)
         else:
-            # New behavior: use FastFireModel with spread mode
-            self.fire = FastFireModel(self.grid, spread_mode=fire_spread_mode)
+            # New behavior: use FastFireModel with spread mode and configurable rates
+            self.fire = FastFireModel(self.grid,
+                                      spread_rate=fire_spread_rate,
+                                      intensity_growth=fire_intensity_growth,
+                                      spread_mode=fire_spread_mode)
 
         self.fire_update_interval = fire_update_interval
         self.fire_discovery_delay = fire_discovery_delay

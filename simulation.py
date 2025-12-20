@@ -66,6 +66,8 @@ class SimulationConfig:
     fire_update_interval: int = 4  # update fire every N timesteps (default: 4 timesteps = 2 seconds)
     fire_discovery_delay: int = 0  # steps of fire-only propagation before agents start moving (discovery time)
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
+    fire_spread_rate: float = 0.3  # Phase 2 fire spread probability multiplier (0.3=normal, 0.6=aggressive)
+    fire_intensity_growth: float = 0.5  # Phase 2 fire intensity growth per step (0.5=normal, 1.0=aggressive)
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
     door_configs: list[dict] = None  # Optional door configurations
     targets: list[str] = None  # Target waypoints for agents (used when no door_configs)
@@ -97,6 +99,8 @@ class SimulationConfig:
             fire_update_interval=json_data.get('fire_update_interval', 4),
             fire_discovery_delay=json_data.get('fire_discovery_delay', 0),
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
+            fire_spread_rate=json_data.get('fire_spread_rate', 0.3),
+            fire_intensity_growth=json_data.get('fire_intensity_growth', 0.5),
             agent_fearness=json_data.get('agent_fearness', []),
             door_configs=json_data.get('door_configs', []),
             targets=json_data.get('targets', []),
@@ -131,6 +135,8 @@ class SimulationConfig:
             'fire_update_interval': self.fire_update_interval,
             'fire_discovery_delay': self.fire_discovery_delay,
             'fire_model_type': self.fire_model_type,
+            'fire_spread_rate': self.fire_spread_rate,
+            'fire_intensity_growth': self.fire_intensity_growth,
             'agent_fearness': self.agent_fearness,
             'door_configs': self.door_configs,
             'targets': self.targets,

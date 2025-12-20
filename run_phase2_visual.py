@@ -397,7 +397,8 @@ def load_config_and_create_sim(config_path: str, fire_spread_mode: str = 'always
         fire_discovery_delay=config.fire_discovery_delay,
         fire_spread_mode=fire_spread_mode,
         fire_spread_rate=config.fire_spread_rate,
-        fire_intensity_growth=config.fire_intensity_growth
+        fire_intensity_growth=config.fire_intensity_growth,
+        fire_damage_threshold=config.fire_damage_threshold
     )
 
     return sim, config

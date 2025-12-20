@@ -65,7 +65,8 @@ class FastEvacuationSim:
                  fire_discovery_delay: int = 0,
                  fire_spread_mode: str = 'always_real',
                  fire_spread_rate: float = 0.3,
-                 fire_intensity_growth: float = 0.5):
+                 fire_intensity_growth: float = 0.5,
+                 fire_damage_threshold: float = 10.0):
         """
         Initialize simulation.
 
@@ -80,6 +81,7 @@ class FastEvacuationSim:
             fire_spread_mode: Fire spread behavior - 'always_real', 'real_then_simple', or 'real_then_stop'
             fire_spread_rate: Probability multiplier for fire spread (0.3=normal, 0.6=aggressive)
             fire_intensity_growth: How fast fire intensity grows per step (0.5=normal, 1.0=aggressive)
+            fire_damage_threshold: Cumulative fire damage that counts as casualty (0=disabled)
         """
         # Initialize grid with fire
         self.grid = grid.astype(np.float32)
@@ -123,6 +125,7 @@ class FastEvacuationSim:
 
         self.fire_update_interval = fire_update_interval
         self.fire_discovery_delay = fire_discovery_delay
+        self.fire_damage_threshold = fire_damage_threshold
         self.step_count = 0
 
     def _update_pathfinders(self, changed_cells: List[Tuple[int, int]]):
@@ -245,21 +248,34 @@ class FastEvacuationSim:
         dead = sum(1 for a in self.agents if a.status == 'dead')
         total = len(self.agents)
 
-        # Survival = evacuated + stuck (not dead)
-        survived = evacuated + stuck
+        # Calculate fire damage for survival calculation
+        fire_exposures = [a.fire_damage for a in self.agents]
+        avg_fire_damage = np.mean(fire_exposures) if fire_exposures else 0.0
+
+        # Count casualties from fire damage threshold (agents who took too much damage)
+        # Only count if threshold > 0 (0 = disabled)
+        if self.fire_damage_threshold > 0:
+            fire_casualties = sum(1 for a in self.agents
+                                  if a.fire_damage >= self.fire_damage_threshold
+                                  and a.status != 'dead')  # Don't double-count dead
+            # Survival = not dead AND not over fire damage threshold
+            survived = total - dead - fire_casualties
+        else:
+            # Legacy behavior: Survival = evacuated + stuck (not dead)
+            survived = evacuated + stuck
+
         survival_rate = survived / total if total > 0 else 0
 
         avg_time = np.mean(evacuation_times) if evacuation_times else self.step_count
 
-        # Calculate average fire damage across all agents
-        fire_exposures = [a.fire_damage for a in self.agents]
-        avg_fire_damage = np.mean(fire_exposures) if fire_exposures else 0.0
-
-        # RL reward calculation
+        # RL reward calculation (includes fire damage penalty)
+        fire_damage_penalty = sum(min(a.fire_damage, self.fire_damage_threshold)
+                                  for a in self.agents) * -0.5 if self.fire_damage_threshold > 0 else 0
         reward = (
             evacuated * 10.0 +          # Bonus per evacuated
             stuck * -5.0 +              # Penalty per stuck
             dead * -20.0 +              # Heavy penalty per death
+            fire_damage_penalty +       # Penalty for fire exposure
             self.step_count * -0.01     # Small time penalty
         )
 

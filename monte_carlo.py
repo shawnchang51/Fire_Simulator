@@ -474,7 +474,8 @@ def _run_single_simulation(args):
                 fire_discovery_delay=config_copy.fire_discovery_delay,
                 fire_spread_mode=fire_spread_mode,
                 fire_spread_rate=config_copy.fire_spread_rate,
-                fire_intensity_growth=config_copy.fire_intensity_growth
+                fire_intensity_growth=config_copy.fire_intensity_growth,
+                fire_damage_threshold=config_copy.fire_damage_threshold
             )
 
             phase2_result = sim.run(max_steps=500)

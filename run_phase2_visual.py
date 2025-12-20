@@ -126,7 +126,7 @@ class VisualPhase2Wrapper:
 
         return done, status_dict, status_str
 
-    def run_with_visualization(self, max_steps=500, use_pygame=True, use_matlab=False):
+    def run_with_visualization(self, max_steps=500, use_pygame=True, use_matlab=False, fps=10):
         """
         Run Phase 2 simulation with visualization.
 
@@ -194,6 +194,11 @@ class VisualPhase2Wrapper:
             targets,
             status_dict
         )
+        # Respect display frame rate if available
+        try:
+            visualizer.wait_for_next_frame(fps=fps)
+        except Exception:
+            pass
 
         # Main simulation loop with visualization
         evacuation_times = []
@@ -225,37 +230,50 @@ class VisualPhase2Wrapper:
                 # Update pathfinders
                 self.sim._update_pathfinders(changed_cells)
 
-            # Move all agents
-            for i, agent in enumerate(self.sim.agents):
-                if agent.status != 'active':
-                    continue
+            # Only move agents after fire discovery delay has passed
+            if step >= self.sim.fire_discovery_delay:
+                # Move all agents
+                for i, agent in enumerate(self.sim.agents):
+                    if agent.status != 'active':
+                        continue
 
-                # Track fire damage BEFORE moving
-                cell_value = self.sim.grid[agent.y, agent.x]
-                if cell_value > 0:
-                    agent.fire_damage += cell_value
+                    # Track fire damage BEFORE moving
+                    cell_value = self.sim.grid[agent.y, agent.x]
+                    if cell_value > 0:
+                        agent.fire_damage += cell_value
 
-                # Get next position from pathfinder
-                pathfinder = self.sim.agent_pathfinders[i]
-                next_pos = pathfinder.get_next_move()
+                    # Get next position from pathfinder
+                    pathfinder = self.sim.agent_pathfinders[i]
+                    next_pos = pathfinder.get_next_move()
 
-                if next_pos is None:
-                    agent.status = 'stuck'
-                    continue
+                    if next_pos is None:
+                        agent.status = 'stuck'
+                        continue
 
-                # Check if reached exit
-                if next_pos in self.sim.exits:
-                    agent.status = 'evacuated'
+                    # Check if reached exit
+                    if next_pos in self.sim.exits:
+                        agent.status = 'evacuated'
+                        agent.steps = step + 1
+                        evacuation_times.append(agent.steps)
+                        continue
+
+                    # Move agent
+                    agent.x, agent.y = next_pos
                     agent.steps = step + 1
-                    evacuation_times.append(agent.steps)
-                    continue
 
-                # Move agent
-                agent.x, agent.y = next_pos
-                agent.steps = step + 1
-
-                # Update pathfinder position
-                pathfinder.move_start(next_pos)
+                    # Update pathfinder position
+                    pathfinder.move_start(next_pos)
+            else:
+                # Fire discovery delay: fire spreads but agents don't move
+                # Still track fire damage at current positions
+                for agent in self.sim.agents:
+                    if agent.status == 'active':
+                        cell_value = self.sim.grid[agent.y, agent.x]
+                        if cell_value > 0:
+                            agent.fire_damage += cell_value
+                        # Check if fire kills agent during delay
+                        if cell_value > 3.0:
+                            agent.status = 'dead'
 
             # Check termination conditions
             active = sum(1 for a in self.sim.agents if a.status == 'active')
@@ -276,6 +294,12 @@ class VisualPhase2Wrapper:
                 status_dict
             ):
                 break  # User closed window
+
+            # Throttle frame rate to keep visualization consistent
+            try:
+                visualizer.wait_for_next_frame(fps=fps)
+            except Exception:
+                pass
 
             # Check termination
             if active == 0:
@@ -415,6 +439,12 @@ def main():
              "'real_then_simple' (stochastic spread until stable, then intensity growth only), "
              "'real_then_stop' (stochastic spread until stable, then completely static) (default: always_real)"
     )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=10,
+        help="Frame rate for pygame visualization (frames per second, default: 10)"
+    )
 
     args = parser.parse_args()
 
@@ -424,6 +454,7 @@ def main():
     print(f"Config: {args.config}")
     print(f"Visualization: {'MATLAB-style' if args.matlab else 'Pygame'}")
     print(f"Max steps: {args.max_steps}")
+    print(f"FPS: {args.fps}")
     print(f"Fire spread mode: {args.fire_spread_mode}")
     print("="*60)
     print()
@@ -446,7 +477,8 @@ def main():
     result = wrapper.run_with_visualization(
         max_steps=args.max_steps,
         use_pygame=(not args.matlab),
-        use_matlab=args.matlab
+        use_matlab=args.matlab,
+        fps=args.fps
     )
 
     if result:

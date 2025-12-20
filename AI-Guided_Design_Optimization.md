@@ -6,12 +6,18 @@ Performance optimization guide for using Monte Carlo simulations to train a pair
 
 **Goal**: Make simulations fast enough for pairwise comparison labeling (10K-100K candidate evaluations)
 
-| Approach | Effort | Speedup | Per-Sim Time |
-|----------|--------|---------|--------------|
-| Current baseline | - | 1x | ~2.0s |
-| Conservative (config tuning) | 1-2 days | 3-5x | ~0.4-0.6s |
-| Moderate (architectural) | 1-2 weeks | 10-50x | ~0.04-0.2s |
-| Aggressive (ML acceleration) | 1-2 months | 100-1000x | ~0.002-0.02s |
+| Approach | Effort | Speedup | Per-Sim Time | Status |
+|----------|--------|---------|--------------|--------|
+| Current baseline | - | 1x | ~2.0s | - |
+| Phase 1: Conservative (config tuning) | 1-2 days | 3-5x | ~0.4-0.6s | **DONE** |
+| Phase 2: Moderate (architectural) | 1-2 weeks | 10-50x | ~0.04-0.2s | **DONE** |
+| Phase 3: Aggressive (ML acceleration) | 1-2 months | 100-1000x | ~0.002-0.02s | Not started |
+
+**Recent additions (Dec 2024):**
+- `fire_spread_rate`: Configurable fire spread probability (0.3=normal, 0.6=aggressive)
+- `fire_intensity_growth`: Configurable intensity growth per step (0.5=normal, 1.0=fast)
+- `fire_damage_threshold`: Cumulative damage threshold for survival calculation (more realistic outcomes)
+- `fire_discovery_delay`: Steps before agents react (simulates detection delay)
 
 ---
 
@@ -1992,10 +1998,13 @@ class AIGuidedSearch:
 - [x] Implement candidate generator (random/rule-based door placement)
 
 ### Week 3-4: Phase 2 (Moderate - Fast Labeling Pipeline)
-- [ ] Implement `optimized_d_star_lite.py` (optimized D* Lite maintaining incremental replanning)
-- [ ] Implement `fast_fire.py` (vectorized fire model)
-- [ ] Implement `fast_simulation.py` (lightweight eval with optimized D* Lite)
-- [ ] Create `pairwise_ranking_interface.py`
+- [x] Implement `optimized_d_star_lite.py` (optimized D* Lite maintaining incremental replanning)
+- [x] Implement `fast_fire.py` (vectorized fire model with configurable spread_rate/intensity_growth)
+- [x] Implement `fast_simulation.py` (lightweight eval with optimized D* Lite)
+- [x] Create `pairwise_ranking_interface.py`
+- [x] Add Phase 2 fire config params: `fire_spread_rate`, `fire_intensity_growth`, `fire_damage_threshold`
+- [x] Add `fire_discovery_delay` for realistic detection time simulation
+- [x] Integrate Phase 2 with Monte Carlo (`--phase2` flag)
 - [ ] Generate initial training dataset (5K-10K pairs)
 - [ ] Benchmark: Target 50,000+ sims/hour
 

@@ -77,6 +77,38 @@ fire_det = DeterministicFireModel(grid, spread_threshold=0.3)
 grid_det = fire_det.step_n(10)
 ```
 
+**Fire Configuration Parameters (JSON config):**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `fire_spread_rate` | 0.3 | Spread probability multiplier (0.3=normal, 0.6=aggressive) |
+| `fire_intensity_growth` | 0.5 | Intensity growth per step (0.5=normal, 1.0=aggressive) |
+| `fire_discovery_delay` | 0 | Steps of fire spread before agents start moving |
+| `fire_damage_threshold` | 10.0 | Cumulative fire damage that counts as casualty (0=disabled) |
+
+**Survival Rate Calculation:**
+
+```python
+# Agents accumulate fire_damage when in fire cells:
+agent.fire_damage += fire_intensity  # intensity is 1-4
+
+# Survival calculation:
+if fire_damage_threshold > 0:
+    fire_casualties = count(agents with fire_damage >= threshold)
+    survived = total - dead - fire_casualties
+else:
+    survived = evacuated + stuck  # Legacy behavior
+```
+
+**Recommended Configurations for Variance:**
+
+| Scenario | `fire_spread_rate` | `fire_intensity_growth` | `fire_discovery_delay` | `fire_damage_threshold` |
+|----------|-------------------|------------------------|------------------------|------------------------|
+| Baseline | 0.3 | 0.5 | 0 | 0 (disabled) |
+| Moderate | 0.5 | 0.75 | 20 | 10.0 |
+| Aggressive | 0.6 | 1.0 | 40 | 10.0 |
+| Worst case | 0.7 | 1.5 | 60 | 5.0 |
+
 ### 3. FastEvacuationSim (`fast_simulation.py`)
 
 **Performance:** 10-20x faster than full EvacuationSimulation
@@ -111,7 +143,11 @@ sim = FastEvacuationSim(
     exits=exits,
     fire_starts=fire_starts,
     deterministic_fire=True,
-    fire_update_interval=4
+    fire_update_interval=4,
+    fire_discovery_delay=40,        # Steps before agents start moving
+    fire_spread_rate=0.5,           # 0.3=normal, 0.6=aggressive
+    fire_intensity_growth=0.75,     # 0.5=normal, 1.0=aggressive
+    fire_damage_threshold=10.0      # Cumulative damage for casualty (0=disabled)
 )
 
 result = sim.run(max_steps=200, stuck_threshold=0.5, death_threshold=0.3)
@@ -356,6 +392,24 @@ print(f"Speedup: {1000/20}x fewer simulator calls")
 - Use more Monte Carlo trials (5 instead of 3)
 - Filter out ambiguous pairs (`label = None`)
 - Ensure diverse floor plans in training set
+
+### High survival rates / Low variance between runs
+If you're seeing 99%+ survival rates with <5% variance:
+- Increase `fire_spread_rate` to 0.5-0.7 (faster spread)
+- Add `fire_discovery_delay` of 30-60 steps (delayed detection)
+- Enable `fire_damage_threshold` at 10.0 (cumulative damage counts)
+- Place fires strategically near exits/chokepoints
+- Increase `fire_intensity_growth` to 0.75-1.0
+
+Example config for meaningful variance:
+```json
+{
+  "fire_spread_rate": 0.6,
+  "fire_intensity_growth": 1.0,
+  "fire_discovery_delay": 40,
+  "fire_damage_threshold": 10.0
+}
+```
 
 ## Dependencies
 

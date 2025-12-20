@@ -64,6 +64,7 @@ class SimulationConfig:
     cell_size: float = 0.3  # meters per cell
     timestep_duration: float = 0.5  # seconds per timestep
     fire_update_interval: int = 4  # update fire every N timesteps (default: 4 timesteps = 2 seconds)
+    fire_discovery_delay: int = 0  # steps of fire-only propagation before agents start moving (discovery time)
     fire_model_type: str = "realistic"  # "realistic", "aggressive", or "default"
     agent_fearness: list[float] = None  # fearness multiplier per agent (default: 1.0 for all)
     door_configs: list[dict] = None  # Optional door configurations
@@ -94,6 +95,7 @@ class SimulationConfig:
             cell_size=json_data.get('cell_size', 0.3),
             timestep_duration=json_data.get('timestep_duration', 0.5),
             fire_update_interval=json_data.get('fire_update_interval', 4),
+            fire_discovery_delay=json_data.get('fire_discovery_delay', 0),
             fire_model_type=json_data.get('fire_model_type', 'realistic'),
             agent_fearness=json_data.get('agent_fearness', []),
             door_configs=json_data.get('door_configs', []),
@@ -127,6 +129,7 @@ class SimulationConfig:
             'cell_size': self.cell_size,
             'timestep_duration': self.timestep_duration,
             'fire_update_interval': self.fire_update_interval,
+            'fire_discovery_delay': self.fire_discovery_delay,
             'fire_model_type': self.fire_model_type,
             'agent_fearness': self.agent_fearness,
             'door_configs': self.door_configs,
@@ -1272,22 +1275,27 @@ class EvacuationSimulation():
                 self.simulation_results['termination_reason'] = 'max_steps_reached'
                 break
 
-            results = self.step()
-
-            # Track reached targets for visualization
-            # for agent_id, result in results:
-            #     if result == 'New Target Set':
-            #         # Find the agent and add their previous target to reached targets
-            #         for agent in self.agents:
-            #             if agent.id == agent_id and agent.targetidx > 0:
-            #                 prev_target = self.targets[agent.targetidx - 1]
-            #                 reached_targets.add(prev_target)
-
             # Update fire model at specified interval (decoupled from agent movement)
             if self.steps % self.config.fire_update_interval == 0:
                 changes = self.update_fire()
                 if changes:
                     self.update_environment(changes)
+
+            # Only move agents after fire discovery delay has passed
+            if self.steps >= self.config.fire_discovery_delay:
+                results = self.step()
+
+                # Track reached targets for visualization
+                # for agent_id, result in results:
+                #     if result == 'New Target Set':
+                #         # Find the agent and add their previous target to reached targets
+                #         for agent in self.agents:
+                #             if agent.id == agent_id and agent.targetidx > 0:
+                #                 prev_target = self.targets[agent.targetidx - 1]
+                #                 reached_targets.add(prev_target)
+            else:
+                # Fire discovery delay: fire spreads but agents don't move
+                results = []
 
             # Share door graph knowledge between nearby agents at specified interval
             if self.steps % self.sharing_interval == 0:

@@ -322,7 +322,7 @@ class VisualPhase2Wrapper:
         return result
 
 
-def load_config_and_create_sim(config_path: str) -> tuple:
+def load_config_and_create_sim(config_path: str, fire_spread_mode: str = 'always_real') -> tuple:
     """
     Load configuration and create Phase 2 simulation.
 
@@ -369,7 +369,9 @@ def load_config_and_create_sim(config_path: str) -> tuple:
         exits=exits if exits else [(fire_map.shape[1]-1, fire_map.shape[0]-1)],
         fire_starts=fire_starts if fire_starts else None,
         deterministic_fire=False,  # Use stochastic fire for realistic spread
-        fire_update_interval=config.fire_update_interval
+        fire_update_interval=config.fire_update_interval,
+        fire_discovery_delay=config.fire_discovery_delay,
+        fire_spread_mode=fire_spread_mode
     )
 
     return sim, config
@@ -404,6 +406,15 @@ def main():
         default=None,
         help="Fire update interval in timesteps (default: use config value)"
     )
+    parser.add_argument(
+        "--fire-spread-mode",
+        type=str,
+        default="always_real",
+        choices=["always_real", "real_then_simple", "real_then_stop"],
+        help="Fire spread mode: 'always_real' (continuous stochastic spread, most realistic), "
+             "'real_then_simple' (stochastic spread until stable, then intensity growth only), "
+             "'real_then_stop' (stochastic spread until stable, then completely static) (default: always_real)"
+    )
 
     args = parser.parse_args()
 
@@ -413,11 +424,12 @@ def main():
     print(f"Config: {args.config}")
     print(f"Visualization: {'MATLAB-style' if args.matlab else 'Pygame'}")
     print(f"Max steps: {args.max_steps}")
+    print(f"Fire spread mode: {args.fire_spread_mode}")
     print("="*60)
     print()
 
     # Load configuration and create simulation
-    sim, config = load_config_and_create_sim(args.config)
+    sim, config = load_config_and_create_sim(args.config, fire_spread_mode=args.fire_spread_mode)
 
     # Override fire interval if specified
     if args.fire_interval is not None:

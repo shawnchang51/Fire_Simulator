@@ -12,7 +12,7 @@ import numpy as np
 from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass
 from optimized_d_star_lite import OptimizedDStarLite, SharedGridDStarLite
-from fast_fire import FastFireModel, DeterministicFireModel
+from fast_fire import FastFireModel, DeterministicFireModel, FireSpreadMode
 
 @dataclass
 class FastAgent:
@@ -61,7 +61,9 @@ class FastEvacuationSim:
                  exits: List[Tuple[int, int]],
                  fire_starts: List[Tuple[int, int]] = None,
                  deterministic_fire: bool = True,
-                 fire_update_interval: int = 4):
+                 fire_update_interval: int = 4,
+                 fire_discovery_delay: int = 0,
+                 fire_spread_mode: str = 'always_real'):
         """
         Initialize simulation.
 
@@ -70,8 +72,10 @@ class FastEvacuationSim:
             agent_starts: List of (x, y) agent starting positions
             exits: List of (x, y) exit positions
             fire_starts: Optional list of (x, y) initial fire positions
-            deterministic_fire: Use deterministic fire spread
+            deterministic_fire: Use deterministic fire spread (legacy, overridden by fire_spread_mode)
             fire_update_interval: Steps between fire updates
+            fire_discovery_delay: Steps of fire-only propagation before agents start moving (discovery time)
+            fire_spread_mode: Fire spread behavior - 'always_real', 'real_then_simple', or 'real_then_stop'
         """
         # Initialize grid with fire
         self.grid = grid.astype(np.float32)
@@ -96,13 +100,20 @@ class FastEvacuationSim:
             pathfinder.compute_shortest_path()
             self.agent_pathfinders.append(pathfinder)
 
-        # Initialize fire model
-        if deterministic_fire:
+        # Initialize fire model with spread mode support
+        # Convert string to enum
+        if isinstance(fire_spread_mode, str):
+            fire_spread_mode = FireSpreadMode(fire_spread_mode)
+
+        if deterministic_fire and fire_spread_mode == FireSpreadMode.ALWAYS_REAL:
+            # Legacy behavior: deterministic_fire=True uses DeterministicFireModel
             self.fire = DeterministicFireModel(self.grid)
         else:
-            self.fire = FastFireModel(self.grid)
+            # New behavior: use FastFireModel with spread mode
+            self.fire = FastFireModel(self.grid, spread_mode=fire_spread_mode)
 
         self.fire_update_interval = fire_update_interval
+        self.fire_discovery_delay = fire_discovery_delay
         self.step_count = 0
 
     def _update_pathfinders(self, changed_cells: List[Tuple[int, int]]):
@@ -155,46 +166,52 @@ class FastEvacuationSim:
 
                 self._update_pathfinders(changed_cells)
 
-            # Move agents
+            # Only move agents after fire discovery delay has passed
             active_count = 0
-            for i, agent in enumerate(self.agents):
-                if agent.status != 'active':
-                    continue
+            if step >= self.fire_discovery_delay:
+                # Move agents
+                for i, agent in enumerate(self.agents):
+                    if agent.status != 'active':
+                        continue
 
-                active_count += 1
-                agent.steps += 1
+                    active_count += 1
+                    agent.steps += 1
 
-                # Track fire damage at current position
-                fire_intensity = max(0, self.grid[agent.y, agent.x])
-                if fire_intensity > 0:
-                    agent.fire_damage += fire_intensity
+                    # Track fire damage at current position
+                    fire_intensity = max(0, self.grid[agent.y, agent.x])
+                    if fire_intensity > 0:
+                        agent.fire_damage += fire_intensity
 
-                # Check if at exit
-                if (agent.x, agent.y) in self.exits:
-                    agent.status = 'evacuated'
-                    evacuation_times.append(agent.steps)
-                    continue
+                    # Check if at exit
+                    if (agent.x, agent.y) in self.exits:
+                        agent.status = 'evacuated'
+                        evacuation_times.append(agent.steps)
+                        continue
 
-                # Check if in intense fire (death threshold)
-                if fire_intensity > 3.0:
-                    agent.status = 'dead'
-                    continue
+                    # Check if in intense fire (death threshold)
+                    if fire_intensity > 3.0:
+                        agent.status = 'dead'
+                        continue
 
-                # Use D* Lite to get next move
-                pathfinder = self.agent_pathfinders[i]
-                next_move = pathfinder.get_next_move()
+                    # Use D* Lite to get next move
+                    pathfinder = self.agent_pathfinders[i]
+                    next_move = pathfinder.get_next_move()
 
-                if next_move:
-                    nx, ny = next_move
-                    # Check if next position is safe
-                    if self.grid[ny, nx] <= 0:
-                        agent.x, agent.y = nx, ny
-                        pathfinder.move_start((nx, ny))
+                    if next_move:
+                        nx, ny = next_move
+                        # Check if next position is safe
+                        if self.grid[ny, nx] <= 0:
+                            agent.x, agent.y = nx, ny
+                            pathfinder.move_start((nx, ny))
+                        else:
+                            # Position became dangerous, D* Lite will replan
+                            agent.status = 'stuck'
                     else:
-                        # Position became dangerous, D* Lite will replan
                         agent.status = 'stuck'
-                else:
-                    agent.status = 'stuck'
+            else:
+                # Fire discovery delay: fire spreads but agents don't move
+                # Still count active agents for early termination checks
+                active_count = sum(1 for a in self.agents if a.status == 'active')
 
             # Early termination checks
             if active_count == 0:

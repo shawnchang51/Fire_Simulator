@@ -6,10 +6,22 @@ Simplified cellular automata fire spread using NumPy operations.
 Removes complex physics (oxygen, temperature, smoke) for speed.
 
 Performance: 5-10x faster than AdvancedFireModel
+
+Fire Spread Modes:
+- 'always_real': Stochastic spread continues throughout simulation (most realistic)
+- 'real_then_simple': Stochastic spread until stable, then deterministic intensity growth only
+- 'real_then_stop': Stochastic spread until stable, then fire becomes completely static
 """
 
 import numpy as np
 from typing import Tuple, Optional
+from enum import Enum
+
+class FireSpreadMode(Enum):
+    """Fire spread behavior modes."""
+    ALWAYS_REAL = 'always_real'           # Continuous stochastic spread (most realistic)
+    REAL_THEN_SIMPLE = 'real_then_simple' # Stochastic spread, then intensity growth only
+    REAL_THEN_STOP = 'real_then_stop'     # Stochastic spread, then completely static
 
 class FastFireModel:
     """
@@ -20,6 +32,11 @@ class FastFireModel:
     - No fuel depletion
     - Fixed spread probabilities
     - No wind effects (can be added if needed)
+
+    Supports three fire spread modes:
+    - ALWAYS_REAL: Continuous stochastic spread (default, most realistic)
+    - REAL_THEN_SIMPLE: Stochastic until stable, then intensity growth only
+    - REAL_THEN_STOP: Stochastic until stable, then completely static
     """
 
     # Spread kernel - probability of igniting neighbors
@@ -32,7 +49,9 @@ class FastFireModel:
     def __init__(self, grid: np.ndarray,
                  spread_rate: float = 0.3,
                  intensity_growth: float = 0.5,
-                 max_intensity: float = 4.0):
+                 max_intensity: float = 4.0,
+                 spread_mode: FireSpreadMode = FireSpreadMode.ALWAYS_REAL,
+                 stability_threshold: int = 3):
         """
         Initialize fire model.
 
@@ -41,18 +60,26 @@ class FastFireModel:
             spread_rate: Probability multiplier for fire spread
             intensity_growth: How fast fire intensity grows per step
             max_intensity: Maximum fire intensity
+            spread_mode: Fire spread behavior mode
+            stability_threshold: Number of consecutive steps with no new ignitions to consider stable
         """
         self.grid = grid.astype(np.float32)
         self.rows, self.cols = grid.shape
         self.spread_rate = spread_rate
         self.intensity_growth = intensity_growth
         self.max_intensity = max_intensity
+        self.spread_mode = spread_mode
+        self.stability_threshold = stability_threshold
 
         # Precompute obstacle mask
         self.walls = (grid == -2)
 
         # Random state for reproducibility
         self.rng = np.random.default_rng()
+
+        # Tracking for spread mode transitions
+        self.steps_without_spread = 0
+        self.is_stable = False
 
     def set_seed(self, seed: int):
         """Set random seed for reproducibility."""
@@ -68,24 +95,53 @@ class FastFireModel:
         # Get current fire cells (intensity > 0, < max)
         active_fire = (self.grid > 0) & (self.grid < self.max_intensity)
 
-        # Grow existing fire intensity
+        # Mode: REAL_THEN_STOP - completely static after stability
+        if self.spread_mode == FireSpreadMode.REAL_THEN_STOP and self.is_stable:
+            return self.grid  # No changes at all
+
+        # Grow existing fire intensity (unless in REAL_THEN_STOP and stable)
         self.grid = np.where(
             active_fire,
             np.minimum(self.grid + self.intensity_growth, self.max_intensity),
             self.grid
         )
 
-        # Calculate spread probability using convolution
-        fire_mask = (self.grid > 0).astype(np.float32)
-        spread_prob = self._convolve(fire_mask, self.SPREAD_KERNEL)
-        spread_prob *= self.spread_rate
+        # Handle spread based on mode
+        ignite_count = 0
 
-        # Determine which cells ignite
-        random_vals = self.rng.random((self.rows, self.cols), dtype=np.float32)
-        ignite = (random_vals < spread_prob) & (self.grid == 0) & ~self.walls
+        # Mode: ALWAYS_REAL or not yet stable - perform stochastic spread
+        if self.spread_mode == FireSpreadMode.ALWAYS_REAL or not self.is_stable:
+            # Calculate spread probability using convolution
+            fire_mask = (self.grid > 0).astype(np.float32)
+            spread_prob = self._convolve(fire_mask, self.SPREAD_KERNEL)
+            spread_prob *= self.spread_rate
 
-        # Ignite new cells
-        self.grid = np.where(ignite, 1.0, self.grid)
+            # Determine which cells ignite
+            random_vals = self.rng.random((self.rows, self.cols), dtype=np.float32)
+            ignite = (random_vals < spread_prob) & (self.grid == 0) & ~self.walls
+
+            # Count new ignitions
+            ignite_count = np.sum(ignite)
+
+            # Ignite new cells
+            self.grid = np.where(ignite, 1.0, self.grid)
+
+        # Mode: REAL_THEN_SIMPLE - no spread after stability, only intensity growth (handled above)
+        # Mode: REAL_THEN_STOP - completely static (handled at top)
+
+        # Track stability for mode transitions
+        if self.spread_mode != FireSpreadMode.ALWAYS_REAL:
+            if ignite_count == 0:
+                self.steps_without_spread += 1
+                if self.steps_without_spread >= self.stability_threshold and not self.is_stable:
+                    self.is_stable = True
+                    print(f"Fire spread stabilized after {self.stability_threshold} steps without new ignitions")
+                    if self.spread_mode == FireSpreadMode.REAL_THEN_SIMPLE:
+                        print(f"  → Switching to intensity growth only (mode: {self.spread_mode.value})")
+                    elif self.spread_mode == FireSpreadMode.REAL_THEN_STOP:
+                        print(f"  → Fire now completely static (mode: {self.spread_mode.value})")
+            else:
+                self.steps_without_spread = 0
 
         return self.grid
 

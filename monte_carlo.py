@@ -422,12 +422,12 @@ def _run_single_simulation(args):
     Worker function to run a single simulation (for parallel execution).
 
     Args:
-        args: Tuple of (config, run_number, total_runs, save_full_results, reachable_positions_cache, use_phase2)
+        args: Tuple of (config, run_number, total_runs, save_full_results, reachable_positions_cache, use_phase2, fire_spread_mode)
 
     Returns:
         Dictionary with simulation results (or error result if failed)
     """
-    config, run_number, total_runs, save_full_results, reachable_positions_cache, use_phase2 = args
+    config, run_number, total_runs, save_full_results, reachable_positions_cache, use_phase2, fire_spread_mode = args
 
     try:
         # Create a deep copy to avoid shared state between processes
@@ -470,7 +470,9 @@ def _run_single_simulation(args):
                 exits=exits if exits else [(fire_map.shape[1]-1, fire_map.shape[0]-1)],
                 fire_starts=fire_starts if fire_starts else None,
                 deterministic_fire=True,
-                fire_update_interval=config_copy.fire_update_interval
+                fire_update_interval=config_copy.fire_update_interval,
+                fire_discovery_delay=config_copy.fire_discovery_delay,
+                fire_spread_mode=fire_spread_mode
             )
 
             phase2_result = sim.run(max_steps=500)
@@ -555,7 +557,7 @@ def _run_single_simulation(args):
         }
 
 
-def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_processes: int = None, save_full_results: bool = False, use_phase2: bool = False) -> tuple:
+def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_processes: int = None, save_full_results: bool = False, use_phase2: bool = False, fire_spread_mode: str = 'always_real') -> tuple:
     """
     Run multiple evacuation simulations in parallel using all available CPU cores.
 
@@ -565,6 +567,7 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
         num_processes (int): Number of processes to use (default: all CPU cores).
         save_full_results (bool): If False, only saves statistics (MUCH lower memory usage).
         use_phase2 (bool): If True, use Phase 2 optimized simulation (10-20x faster).
+        fire_spread_mode (str): Fire spread mode - 'always_real', 'real_then_simple', or 'real_then_stop'.
 
     Returns:
         Tuple of (results, statistics)
@@ -595,7 +598,7 @@ def run_monte_carlo_parallel(config: SimulationConfig, num_runs: int, num_proces
         reachable_positions = compute_reachable_positions(config)
 
     # Prepare arguments for each simulation run
-    sim_args = [(config, i, num_runs, save_full_results, reachable_positions, use_phase2) for i in range(num_runs)]
+    sim_args = [(config, i, num_runs, save_full_results, reachable_positions, use_phase2, fire_spread_mode) for i in range(num_runs)]
 
     # Run simulations in parallel with progress bar
     with Pool(processes=num_processes) as pool:
@@ -961,6 +964,15 @@ Output:
         action="store_true",
         help="Use Phase 2 optimizations (10-20x faster, requires fast_simulation.py)"
     )
+    parser.add_argument(
+        "--fire-spread-mode",
+        type=str,
+        default="always_real",
+        choices=["always_real", "real_then_simple", "real_then_stop"],
+        help="Fire spread mode: 'always_real' (continuous stochastic spread, most realistic), "
+             "'real_then_simple' (stochastic spread until stable, then intensity growth only), "
+             "'real_then_stop' (stochastic spread until stable, then completely static) (default: always_real)"
+    )
     args = parser.parse_args()
 
     # Check Phase 2 availability
@@ -987,7 +999,8 @@ Output:
             num_runs=args.runs,
             num_processes=args.processes,
             save_full_results=save_full_results,
-            use_phase2=args.phase2
+            use_phase2=args.phase2,
+            fire_spread_mode=args.fire_spread_mode
         )
     else:
         if args.phase2:

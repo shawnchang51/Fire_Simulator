@@ -547,28 +547,36 @@ class PairwiseDataset(Dataset):
 
 ## Quick Reference
 
-**⚠️ IMPORTANT: Use V2 - Corrected Version**
+**⚠️ IMPORTANT: Use V3 - Recommended**
 
-V1 had a critical error: it varied agents/fire but kept doors fixed, so the model couldn't learn door placement quality.
+| Version | Status | Issue |
+|---------|--------|-------|
+| V1 | ❌ Wrong | Varied agents/fire, kept doors fixed |
+| V2 | ⚠️ Partial | Varies doors but doesn't use monte_carlo |
+| **V3** | ✅ **Recommended** | **Uses monte_carlo phase2 properly** |
 
-**V2 fixes this**: Varies door/exit positions on the same floor plan.
+**V3** properly leverages your optimized `monte_carlo.py --phase2`:
+- Randomizes agents/fire per run (via monte carlo)
+- Uses Phase 2 fast simulation
+- Aggregates statistics robustly
+- Compares door configs on same floor plan
 
 ```bash
-# Test locally (V2 - CORRECTED)
-python generate_training_data_v2.py \
+# Test locally (V3 - RECOMMENDED)
+python generate_training_data_v3.py \
     --num-floor-plans 10 \
     --door-configs-per-plan 10 \
+    --monte-carlo-runs 5 \
     --workers 4 \
-    --output-dir ./test_v2
+    --output-dir ./test_v3
 
-# Full EPYC run (V2 - CORRECTED)
-python generate_training_data_v2.py \
+# Full EPYC run (V3 - RECOMMENDED)
+python generate_training_data_v3.py \
     --num-floor-plans 1000 \
     --door-configs-per-plan 30 \
-    --scenarios-per-config 3 \
-    --trials-per-scenario 3 \
+    --monte-carlo-runs 10 \
     --workers 120 \
-    --output-dir ./training_data_v2
+    --output-dir ./training_data_v3
 ```
 
-See `TRAINING_DATA_V2_README.md` for details on the correction.
+See `TRAINING_DATA_V3_README.md` for full details.

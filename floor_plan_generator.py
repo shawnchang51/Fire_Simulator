@@ -180,7 +180,8 @@ class FloorPlanGenerator:
 
         def split_space(x: int, y: int, w: int, h: int, depth: int):
             """Recursively split space into rooms"""
-            if depth >= max_depth or w < min_room_size * 2 or h < min_room_size * 2:
+            # Need <= to ensure split position has valid range (low < high)
+            if depth >= max_depth or w <= min_room_size * 2 or h <= min_room_size * 2:
                 # Create room with margin for walls
                 room = Room(x + 1, y + 1, w - 2, h - 2)
                 if room.width >= 3 and room.height >= 3:

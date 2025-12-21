@@ -41,13 +41,13 @@ class SimulationResult:
     @property
     def score(self) -> float:
         """Compute ranking score (higher is better)"""
-        # Primary: survival rate
-        # Secondary: efficiency (fewer steps is better)
-        # Tertiary: low fire damage
+        # Primary: survival rate (weight = 1.0)
+        # Secondary: efficiency - fewer steps is better (weight = 0.5 to amplify differences)
+        # Tertiary: low fire damage (weight = 0.2 to amplify differences)
         return (
             self.survival_rate * 1.0 -
-            (self.steps / 1000) * 0.1 -
-            self.avg_fire_damage * 0.05
+            (self.steps / 1000) * 0.5 -
+            self.avg_fire_damage * 0.2
         )
 
 
@@ -99,9 +99,9 @@ class PairConstructor:
 
     def __init__(
         self,
-        margin: float = 0.05,
-        hard_negative_threshold: float = 0.10,
-        easy_threshold: float = 0.25,
+        margin: float = 0.002,  # Reduced from 0.05 to capture smaller score differences
+        hard_negative_threshold: float = 0.02,  # Adjusted proportionally
+        easy_threshold: float = 0.05,  # Adjusted proportionally
         seed: Optional[int] = None
     ):
         """
@@ -267,6 +267,7 @@ class PairConstructor:
         """Sample random pairs"""
         pairs = []
         attempts = 0
+        rejected_below_margin = 0
         max_attempts = num_pairs * 5
 
         while len(pairs) < num_pairs and attempts < max_attempts:
@@ -276,9 +277,18 @@ class PairConstructor:
                 break
 
             idx_a, idx_b = self.rng.choice(len(results), size=2, replace=False)
+            score_diff = abs(results[idx_a].score - results[idx_b].score)
             pair = self._create_pair(results[idx_a], results[idx_b], pair_type, 'random')
             if pair is not None:
                 pairs.append(pair)
+            elif score_diff < self.margin:
+                rejected_below_margin += 1
+
+        if attempts > 0 and len(pairs) == 0:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"    Random pairs: {attempts} attempts, {len(pairs)} created, "
+                          f"{rejected_below_margin} rejected (below margin {self.margin})")
 
         return pairs
 

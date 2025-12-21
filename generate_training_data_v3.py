@@ -339,6 +339,9 @@ class TrainingDataGeneratorV3:
 
     def _generate_floor_plans(self):
         """Generate diverse floor plans"""
+        floor_plans_dir = os.path.join(self.config.output_dir, 'floor_plans')
+        os.makedirs(floor_plans_dir, exist_ok=True)
+
         for i in range(self.config.num_floor_plans):
             plans = self.floor_plan_generator.generate_batch(
                 num_plans=1,
@@ -349,8 +352,17 @@ class TrainingDataGeneratorV3:
                 grid, metadata = plans[0]
                 self.floor_plans[i] = (grid, metadata)
 
+                # Save floor plan immediately
+                np.savez_compressed(
+                    os.path.join(floor_plans_dir, f'plan_{i:05d}.npz'),
+                    grid=grid,
+                    size=np.array(metadata.size),
+                    room_count=metadata.room_count,
+                    method=metadata.generation_method
+                )
+
             if (i + 1) % 100 == 0:
-                logger.info(f"  Generated {i + 1}/{self.config.num_floor_plans} floor plans")
+                logger.info(f"  Generated {i + 1}/{self.config.num_floor_plans} floor plans (saved to disk)")
 
         logger.info(f"  Generated {len(self.floor_plans)} valid floor plans")
 
@@ -396,6 +408,7 @@ class TrainingDataGeneratorV3:
         # Run evaluations in parallel
         completed = 0
         start_time = time.time()
+        results_file = os.path.join(self.config.output_dir, 'simulation_results.jsonl')
 
         with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
             futures = {executor.submit(evaluate_door_config_monte_carlo, task): task[0]
@@ -422,6 +435,25 @@ class TrainingDataGeneratorV3:
                         )
                         self.all_results.append(sim_result)
 
+                        # Save result immediately to disk
+                        with open(results_file, 'a') as f:
+                            import json
+                            result_dict = {
+                                'floor_plan_id': sim_result.floor_plan_id,
+                                'config_id': sim_result.config_id,
+                                'config': sim_result.config,
+                                'scenario': sim_result.scenario,
+                                'survival_rate': sim_result.survival_rate,
+                                'avg_evacuation_time': sim_result.avg_evacuation_time,
+                                'steps': sim_result.steps,
+                                'evacuated': sim_result.evacuated,
+                                'stuck': sim_result.stuck,
+                                'dead': sim_result.dead,
+                                'avg_fire_damage': sim_result.avg_fire_damage,
+                                'score': sim_result.score
+                            }
+                            f.write(json.dumps(result_dict) + '\n')
+
                     completed += 1
 
                     if completed % 100 == 0:
@@ -432,10 +464,15 @@ class TrainingDataGeneratorV3:
                         logger.info(f"  Completed {completed}/{len(tasks)} configs "
                                   f"({len(self.all_results)} valid) - ETA: {timedelta(seconds=int(eta))}")
 
+                        # Save checkpoint metadata
+                        if completed % self.config.checkpoint_interval == 0:
+                            self._save_checkpoint_metadata(completed, len(tasks))
+
                 except Exception as e:
                     logger.error(f"Task failed: {e}")
 
         logger.info(f"  Evaluated {len(self.all_results)} door configurations")
+        logger.info(f"  Results saved to {results_file}")
 
     def _construct_pairs(self):
         """Construct pairwise labels within each floor plan"""
@@ -443,9 +480,23 @@ class TrainingDataGeneratorV3:
         for result in self.all_results:
             by_plan[result.floor_plan_id].append(result)
 
+        logger.info(f"  Grouped results into {len(by_plan)} floor plans")
+
+        # Save pairs incrementally
+        raw_pairs_file = os.path.join(self.config.output_dir, 'raw_pairs.jsonl')
+        pairs_saved = 0
+
         for plan_id, plan_results in by_plan.items():
             if len(plan_results) < 2:
+                logger.debug(f"  Plan {plan_id}: Only {len(plan_results)} config(s), skipping")
                 continue
+
+            # Debug: Show score distribution for this floor plan
+            scores = [r.score for r in plan_results]
+            if (plan_id + 1) % 100 == 0:
+                logger.info(f"  Plan {plan_id}: {len(plan_results)} configs, scores: "
+                           f"min={min(scores):.4f}, max={max(scores):.4f}, "
+                           f"range={max(scores)-min(scores):.4f}")
 
             # All pairs within same floor plan
             pairs = self.pair_constructor.construct_pairs(
@@ -455,18 +506,31 @@ class TrainingDataGeneratorV3:
                 within_plan_ratio=1.0
             )
 
+            if (plan_id + 1) % 100 == 0:
+                logger.info(f"  Plan {plan_id}: Constructed {len(pairs)} pairs")
+
             self.all_pairs.extend(pairs)
+
+            # Save pairs for this plan immediately
+            with open(raw_pairs_file, 'a') as f:
+                for pair in pairs:
+                    f.write(json.dumps(pair.to_dict()) + '\n')
+            pairs_saved += len(pairs)
+
+            if (plan_id + 1) % self.config.checkpoint_interval == 0:
+                logger.info(f"  Checkpoint: {pairs_saved} pairs saved to disk")
 
         # Balance labels
         self.all_pairs = self.pair_constructor.balance_labels(self.all_pairs)
 
         logger.info(f"  Constructed {len(self.all_pairs)} pairwise labels")
+        logger.info(f"  Raw pairs saved to {raw_pairs_file}")
         stats = self.pair_constructor.get_pair_statistics(self.all_pairs)
         logger.info(f"  Label distribution: {stats.get('label_1_ratio', 0):.1%} positive")
         logger.info(f"  Avg score diff: {stats.get('avg_score_diff', 0):.3f}")
 
     def _validate_and_save(self):
-        """Validate and save to disk"""
+        """Validate and save final splits to disk"""
         pair_dicts = [p.to_dict() for p in self.all_pairs]
 
         # Create splits
@@ -506,24 +570,26 @@ class TrainingDataGeneratorV3:
         with open(os.path.join(self.config.output_dir, 'metadata.json'), 'w') as f:
             json.dump(metadata, f, indent=2, default=str)
 
-        # Save floor plans
-        self._save_floor_plans()
+        logger.info(f"  Metadata saved to metadata.json")
+        logger.info(f"  Floor plans already saved to floor_plans/ (incremental)")
 
-    def _save_floor_plans(self):
-        """Save floor plans to disk"""
-        floor_plans_dir = os.path.join(self.config.output_dir, 'floor_plans')
-        os.makedirs(floor_plans_dir, exist_ok=True)
+    def _save_checkpoint_metadata(self, completed: int, total: int):
+        """Save progress checkpoint metadata"""
+        checkpoint = {
+            'checkpoint_time': datetime.now().isoformat(),
+            'progress': {
+                'floor_plans_generated': len(self.floor_plans),
+                'configs_evaluated': len(self.all_results),
+                'configs_completed': completed,
+                'configs_total': total,
+                'completion_percent': (completed / total * 100) if total > 0 else 0
+            },
+            'config': asdict(self.config)
+        }
 
-        for plan_id, (grid, metadata) in self.floor_plans.items():
-            np.savez_compressed(
-                os.path.join(floor_plans_dir, f'plan_{plan_id:05d}.npz'),
-                grid=grid,
-                size=np.array(metadata.size),
-                room_count=metadata.room_count,
-                method=metadata.generation_method
-            )
-
-        logger.info(f"  Saved {len(self.floor_plans)} floor plans")
+        checkpoint_file = os.path.join(self.config.output_dir, 'checkpoint.json')
+        with open(checkpoint_file, 'w') as f:
+            json.dump(checkpoint, f, indent=2)
 
 
 def main():

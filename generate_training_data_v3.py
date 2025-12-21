@@ -63,11 +63,17 @@ class GenerationConfig:
     min_door_spacing: int = 3
 
     # Monte Carlo simulation parameters
-    agent_count_range: Tuple[int, int] = (10, 50)  # Will be randomized per run
+    occupant_density_range: Tuple[float, float] = (0.02, 0.10)  # 2% to 10% of passable cells
     max_steps: int = 500
-    fire_spread_rate: float = 0.3
-    fire_intensity_growth: float = 0.5
-    fire_damage_threshold: float = 10.0
+
+    # Fire parameter ranges (will be randomized per MC run)
+    num_fires_range: Tuple[int, int] = (2, 5)  # More fires for better differentiation
+    fire_spread_rate_range: Tuple[float, float] = (0.2, 0.6)  # Normal to aggressive
+    fire_intensity_growth_range: Tuple[float, float] = (0.3, 1.0)
+    fire_discovery_delay_range: Tuple[int, int] = (0, 20)  # Early to late detection
+
+    # Fixed parameters (same baseline for all comparisons)
+    fire_damage_threshold: float = 10.0  # Fixed threshold for consistent baseline
 
     # Output parameters
     output_dir: str = './training_data_v3'
@@ -79,7 +85,15 @@ class GenerationConfig:
 
 def evaluate_door_config_monte_carlo(args: Tuple) -> Dict[str, Any]:
     """
-    Evaluate a single door configuration using monte carlo phase2.
+    Evaluate a single door configuration with randomized monte carlo runs.
+
+    Each run randomizes:
+    - Agent positions
+    - Fire positions
+    - Fire spread rate
+    - Fire intensity growth
+    - Fire discovery delay
+    - Fire damage threshold
 
     Args:
         args: (floor_plan_id, config_id, grid, door_config, mc_params)
@@ -92,93 +106,172 @@ def evaluate_door_config_monte_carlo(args: Tuple) -> Dict[str, Any]:
     grid = np.array(grid_data, dtype=np.float32)
 
     try:
-        # Create a temporary config for this door configuration
-        # Extract exits and doors
-        exits = []
-        doors = []
+        from fast_simulation import FastEvacuationSim
+        from fast_fire import FireSpreadMode
 
+        # Extract exit positions from door config
+        exit_positions = []
         for door in door_config:
-            pos_str = door.get('position', '')
-            if 'x' in pos_str and 'y' in pos_str:
-                parts = pos_str.split('y')
-                x = int(parts[0][1:])
-                y = int(parts[1])
+            if door.get('type') == 'exit':
+                pos_str = door.get('position', '')
+                if 'x' in pos_str and 'y' in pos_str:
+                    parts = pos_str.split('y')
+                    x = int(parts[0][1:])
+                    y = int(parts[1])
+                    exit_positions.append((x, y))
 
-                door_dict = {
-                    'id': door['id'],
-                    'position': pos_str,
-                    'type': door['type']
-                }
-
-                if door['type'] == 'exit':
-                    exits.append(door_dict)
-                else:
-                    doors.append(door_dict)
-
-        # Create simulation config
-        rows, cols = grid.shape
-        agent_count = np.random.randint(
-            mc_params['agent_count_range'][0],
-            mc_params['agent_count_range'][1]
-        )
-
-        config_dict = {
-            'map_rows': rows,
-            'map_cols': cols,
-            'cell_size': 0.3,
-            'timestep_duration': 0.5,
-            'fire_update_interval': 2,
-            'agent_num': agent_count,
-            'max_occupancy': 2,
-            'viewing_range': 10,
-            'fire_spread_rate': mc_params['fire_spread_rate'],
-            'fire_intensity_growth': mc_params['fire_intensity_growth'],
-            'fire_damage_threshold': mc_params['fire_damage_threshold'],
-            'fire_discovery_delay': 0,
-            'start_positions': [],  # Will be randomized by monte carlo
-            'targets': [exits[0]['position']] if exits else [f"x{cols-1}y{rows-1}"],
-            'initial_fire_map': grid.tolist(),
-            'door_configs': doors + exits
-        }
-
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(config_dict, f)
-            temp_config_path = f.name
-
-        try:
-            # Load config
-            config = SimulationConfig.from_file(temp_config_path)
-
-            # Run monte carlo with phase2
-            results, statistics = run_monte_carlo_parallel(
-                config=config,
-                num_runs=mc_params['monte_carlo_runs'],
-                num_processes=1,  # Will be parallelized at higher level
-                save_full_results=False,
-                use_phase2=True,
-                fire_spread_mode='always_real'
-            )
-
-            # Extract key statistics
+        if not exit_positions:
             return {
                 'floor_plan_id': floor_plan_id,
                 'config_id': config_id,
-                'door_config': door_config,
-                'survival_rate': statistics['success_rate'] / 100.0,  # Convert to 0-1
-                'avg_steps': statistics['average_steps'],
-                'avg_fire_damage': statistics['average_fire_damage'],
-                'evacuated': statistics['evacuated_agents'],
-                'survived': statistics['survived_agents'],
-                'error_count': statistics['error_count'],
-                'num_runs': mc_params['monte_carlo_runs'],
-                'statistics': statistics  # Keep full stats for analysis
+                'error': 'No exits found in door config'
             }
 
-        finally:
-            # Clean up temp file
-            if os.path.exists(temp_config_path):
-                os.unlink(temp_config_path)
+        rows, cols = grid.shape
+
+        # Find valid positions for agent/fire placement
+        passable_positions = []
+        for y in range(rows):
+            for x in range(cols):
+                if grid[y, x] == 0:  # Passable
+                    passable_positions.append((x, y))
+
+        if len(passable_positions) < 10:
+            return {
+                'floor_plan_id': floor_plan_id,
+                'config_id': config_id,
+                'error': 'Not enough passable positions'
+            }
+
+        # Run multiple monte carlo trials with randomization
+        trial_results = []
+
+        for run_idx in range(mc_params['monte_carlo_runs']):
+            # Randomize occupant density and calculate agent count
+            occupant_density = np.random.uniform(
+                mc_params['occupant_density_range'][0],
+                mc_params['occupant_density_range'][1]
+            )
+            agent_count = int(len(passable_positions) * occupant_density)
+            agent_count = max(5, min(agent_count, len(passable_positions)))  # Clamp to valid range
+
+            # Random agent positions
+            agent_indices = np.random.choice(
+                len(passable_positions),
+                size=agent_count,
+                replace=False
+            )
+            agent_positions = [passable_positions[i] for i in agent_indices]
+
+            # Randomize fire count (2-5 fires for better differentiation)
+            num_fires = np.random.randint(
+                mc_params['num_fires_range'][0],
+                mc_params['num_fires_range'][1] + 1
+            )
+
+            # Ensure fire doesn't overlap with agents
+            available_for_fire = [pos for pos in passable_positions if pos not in agent_positions]
+            if len(available_for_fire) < num_fires:
+                num_fires = max(1, len(available_for_fire))
+
+            fire_indices = np.random.choice(len(available_for_fire), size=num_fires, replace=False)
+            fire_positions = [available_for_fire[i] for i in fire_indices]
+
+            # Randomize fire spread parameters
+            fire_spread_rate = np.random.uniform(
+                mc_params['fire_spread_rate_range'][0],
+                mc_params['fire_spread_rate_range'][1]
+            )
+            fire_intensity_growth = np.random.uniform(
+                mc_params['fire_intensity_growth_range'][0],
+                mc_params['fire_intensity_growth_range'][1]
+            )
+            fire_discovery_delay = np.random.randint(
+                mc_params['fire_discovery_delay_range'][0],
+                mc_params['fire_discovery_delay_range'][1] + 1
+            )
+
+            # Fixed threshold for consistent baseline
+            fire_damage_threshold = mc_params['fire_damage_threshold']
+
+            try:
+                # Run Phase 2 simulation with randomized parameters
+                sim = FastEvacuationSim(
+                    grid=grid.copy(),
+                    agent_starts=agent_positions,
+                    exits=exit_positions,
+                    fire_starts=fire_positions,
+                    deterministic_fire=False,
+                    fire_update_interval=2,
+                    fire_discovery_delay=fire_discovery_delay,
+                    fire_spread_mode='always_real',
+                    fire_spread_rate=fire_spread_rate,
+                    fire_intensity_growth=fire_intensity_growth,
+                    fire_damage_threshold=fire_damage_threshold
+                )
+
+                result = sim.run(max_steps=mc_params['max_steps'])
+
+                trial_results.append({
+                    'survival_rate': result.survival_rate,
+                    'steps': result.steps,
+                    'evacuated': result.evacuated,
+                    'dead': result.dead,
+                    'avg_fire_damage': result.avg_fire_damage,
+                    # Store randomized params for analysis
+                    'occupant_density': occupant_density,
+                    'agent_count': agent_count,
+                    'num_fires': num_fires,
+                    'fire_spread_rate': fire_spread_rate,
+                    'fire_discovery_delay': fire_discovery_delay
+                })
+
+            except Exception as e:
+                logger.warning(f"Trial {run_idx} failed for config {config_id}: {e}")
+                continue
+
+        if not trial_results:
+            return {
+                'floor_plan_id': floor_plan_id,
+                'config_id': config_id,
+                'error': 'All trials failed'
+            }
+
+        # Aggregate results (median for robustness)
+        return {
+            'floor_plan_id': floor_plan_id,
+            'config_id': config_id,
+            'door_config': door_config,
+            'survival_rate': float(np.median([r['survival_rate'] for r in trial_results])),
+            'avg_steps': float(np.median([r['steps'] for r in trial_results])),
+            'avg_fire_damage': float(np.median([r['avg_fire_damage'] for r in trial_results])),
+            'evacuated': int(np.median([r['evacuated'] for r in trial_results])),
+            'dead': int(np.median([r['dead'] for r in trial_results])),
+            'survived': int(np.median([r['evacuated'] for r in trial_results])),
+            'num_runs': len(trial_results),
+            'success_runs': len(trial_results),
+            # Parameter diversity stats
+            'occupant_density_range': [
+                float(min(r['occupant_density'] for r in trial_results)),
+                float(max(r['occupant_density'] for r in trial_results))
+            ],
+            'agent_count_range': [
+                int(min(r['agent_count'] for r in trial_results)),
+                int(max(r['agent_count'] for r in trial_results))
+            ],
+            'num_fires_range': [
+                int(min(r['num_fires'] for r in trial_results)),
+                int(max(r['num_fires'] for r in trial_results))
+            ],
+            'fire_spread_rate_range': [
+                float(min(r['fire_spread_rate'] for r in trial_results)),
+                float(max(r['fire_spread_rate'] for r in trial_results))
+            ],
+            'fire_delay_range': [
+                int(min(r['fire_discovery_delay'] for r in trial_results)),
+                int(max(r['fire_discovery_delay'] for r in trial_results))
+            ]
+        }
 
     except Exception as e:
         logger.error(f"Error evaluating config {config_id} for plan {floor_plan_id}: {e}")
@@ -283,13 +376,16 @@ class TrainingDataGeneratorV3:
                 random_ratio=0.5
             )
 
-            # Create evaluation tasks
+            # Create evaluation tasks with parameter ranges for randomization
             mc_params = {
                 'monte_carlo_runs': self.config.monte_carlo_runs_per_config,
-                'agent_count_range': self.config.agent_count_range,
-                'fire_spread_rate': self.config.fire_spread_rate,
-                'fire_intensity_growth': self.config.fire_intensity_growth,
-                'fire_damage_threshold': self.config.fire_damage_threshold
+                'occupant_density_range': self.config.occupant_density_range,
+                'num_fires_range': self.config.num_fires_range,
+                'fire_spread_rate_range': self.config.fire_spread_rate_range,
+                'fire_intensity_growth_range': self.config.fire_intensity_growth_range,
+                'fire_discovery_delay_range': self.config.fire_discovery_delay_range,
+                'fire_damage_threshold': self.config.fire_damage_threshold,  # Fixed
+                'max_steps': self.config.max_steps
             }
 
             for config_id, door_config in enumerate(door_configs):

@@ -25,14 +25,25 @@ For each floor plan:
   3. Compare door configs using monte carlo statistics
 ```
 
-## What Monte Carlo Provides
+## What Gets Randomized Per Run
 
-✅ **Random agent placement** per run
-✅ **Random fire positions** per run
+Each Monte Carlo run randomizes:
+
+✅ **Occupant density** (2%-10% of passable cells)
+✅ **Agent positions** (random placement based on density)
+✅ **Fire count** (2-5 fires for better differentiation)
+✅ **Fire positions** (randomly placed, no overlap with agents)
+✅ **Fire spread rate** (0.2-0.6: normal to aggressive)
+✅ **Fire intensity growth** (0.3-1.0: slow to fast)
+✅ **Fire discovery delay** (0-20 steps: early to late detection)
+
+**Fixed for consistent baseline:**
+🔒 **Fire damage threshold** (10.0 - same for all runs)
+
+Plus:
 ✅ **Phase 2 fast simulation** (10-20x speedup)
 ✅ **Parallel execution** with multiprocessing
-✅ **Statistical aggregation** (median, percentiles)
-✅ **Memory optimizations** (`--no-full-results`)
+✅ **Statistical aggregation** (median across runs)
 
 ## Data Flow
 
@@ -43,21 +54,43 @@ door_config = [
     {"id": "d1", "position": "x15y10", "type": "door"}
 ]
 
-# Monte carlo runs 10 times with different:
-# - Agent starting positions (randomized)
-# - Fire starting positions (randomized)
+# Run 10 Monte Carlo trials, each randomizes:
+for run in range(10):
+    # Randomize occupant density → agent count
+    occupant_density = random(0.02, 0.10)  # 2%-10% density
+    num_agents = int(passable_cells × occupant_density)
+    agent_positions = random_placement(num_agents)
 
-# Returns aggregated statistics:
+    # Randomize fires (2-5 for better differentiation)
+    num_fires = random(2, 5)
+    fire_positions = random_placement(num_fires)
+
+    # Randomize fire behavior
+    fire_spread_rate = random(0.2, 0.6)       # Normal to aggressive
+    fire_intensity_growth = random(0.3, 1.0)  # Slow to fast
+    fire_discovery_delay = random(0, 20)      # Early to late
+    fire_damage_threshold = 10.0              # FIXED baseline
+
+    # Run Phase 2 simulation
+    result = FastEvacuationSim(
+        grid, agent_positions, door_config,
+        fire_positions, fire_spread_rate, ...
+    ).run()
+
+# Aggregate across 10 runs (median for robustness):
 {
-    'success_rate': 87.5,      # % of successful evacuations
-    'average_steps': 145.3,    # Median evacuation time
-    'average_fire_damage': 2.1,
-    'evacuated_agents': 437,   # Total across runs
-    'survived_agents': 450     # evacuated + stuck
+    'survival_rate': 0.875,           # Median survival rate
+    'avg_steps': 145.3,               # Median evacuation time
+    'avg_fire_damage': 2.1,           # Median fire damage
+    'occupant_density_range': [0.024, 0.095],
+    'agent_count_range': [15, 47],
+    'num_fires_range': [2, 5],        # Actual fire counts used
+    'fire_spread_rate_range': [0.23, 0.58],
+    'fire_delay_range': [2, 18]
 }
 
 # Score for pairwise comparison:
-score = success_rate/100 - (average_steps/1000)
+score = survival_rate - (avg_steps/1000)
 ```
 
 ## Usage
@@ -102,50 +135,70 @@ python generate_training_data_v3.py \
 
 | Aspect | V2 | V3 |
 |--------|----|----|
+| Agent count | Fixed per scenario | **Density-based (2-10% occupancy)** |
 | Agent placement | Fixed per scenario | **Randomized per run** |
+| Fire count | Fixed (1-3) | **More fires (2-5) for differentiation** |
 | Fire placement | Fixed per scenario | **Randomized per run** |
-| Code reuse | Manual simulation calls | **Uses monte_carlo.py** |
-| Robustness | 3 trials per scenario | **10 MC runs with randomization** |
-| Statistics | Manual median | **Monte carlo aggregation** |
+| Fire spread rate | Fixed | **Randomized per run (0.2-0.6)** |
+| Fire intensity | Fixed | **Randomized per run (0.3-1.0)** |
+| Discovery delay | Fixed | **Randomized per run (0-20 steps)** |
+| Damage threshold | Randomized | **FIXED (10.0) for consistent baseline** |
+| Code approach | Manual simulation calls | **Phase 2 with full randomization** |
+| Robustness | 3×3 trials | **10 MC runs, all randomized** |
+| Statistics | Manual median | **Robust median aggregation** |
 
-## Key Differences from Monte Carlo CLI
+## Key Implementation Details
 
-The script **wraps** `run_monte_carlo_parallel()` programmatically:
+The script directly uses **Phase 2 FastEvacuationSim** with full parameter randomization:
 
 ```python
-# V3 creates temporary config for each door config
-config = SimulationConfig.from_dict({
-    'map_rows': 40,
-    'map_cols': 40,
-    'door_configs': door_config,  # THE KEY VARIATION
-    'agent_num': 30,
-    # ... other params
-})
+# For each Monte Carlo run:
+for run in range(10):
+    # Randomize occupant density → agent count
+    occupant_density = random.uniform(0.02, 0.10)  # 2-10% density
+    num_agents = int(len(passable_cells) * occupant_density)
+    agent_positions = random_placement(num_agents)
 
-# Calls monte carlo directly
-results, statistics = run_monte_carlo_parallel(
-    config=config,
-    num_runs=10,
-    use_phase2=True,
-    fire_spread_mode='always_real'
-)
+    # Randomize fire count (2-5 for better differentiation)
+    num_fires = random.randint(2, 5)
+    fire_positions = random_placement(num_fires)
 
-# Extracts statistics for comparison
-survival_rate = statistics['success_rate'] / 100.0
+    # Randomize fire parameters
+    fire_spread_rate = random.uniform(0.2, 0.6)
+    fire_intensity_growth = random.uniform(0.3, 1.0)
+    fire_discovery_delay = random.randint(0, 20)
+
+    # FIXED threshold for consistent baseline
+    fire_damage_threshold = 10.0
+
+    # Run Phase 2 simulation
+    sim = FastEvacuationSim(
+        grid=grid,
+        agent_starts=agent_positions,
+        exits=exit_positions,  # From door_config (FIXED - what we're evaluating)
+        fire_starts=fire_positions,
+        fire_spread_rate=fire_spread_rate,
+        fire_intensity_growth=fire_intensity_growth,
+        fire_discovery_delay=fire_discovery_delay,
+        fire_damage_threshold=fire_damage_threshold,
+        fire_spread_mode='always_real'
+    )
+
+    result = sim.run(max_steps=500)
+
+# Aggregate median statistics across 10 runs
+median_survival_rate = np.median([run.survival_rate for run in results])
+median_steps = np.median([run.steps for run in results])
 ```
 
-## What Gets Randomized (by Monte Carlo)
+## What Stays Fixed (for Fair Comparison)
 
-Monte carlo's `replace_agents()` and `replace_fire()` functions randomize:
+Across all 10 runs for a given door configuration:
 
-- **Agent positions**: Different starting positions each run
-- **Fire positions**: Different fire locations each run
-- **Agent count** (optional): Can vary per run
+- ✅ **Floor plan structure** (walls, obstacles)
+- ✅ **Door/exit positions** (what we're evaluating!)
 
-What stays **fixed** (for fair comparison):
-- Floor plan structure
-- **Door/exit positions** (the variable we're learning)
-- Fire spread parameters
+This ensures door configs are compared fairly under varying conditions.
 
 ## Output Format
 

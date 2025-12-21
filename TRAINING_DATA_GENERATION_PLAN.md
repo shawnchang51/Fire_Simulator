@@ -547,13 +547,28 @@ class PairwiseDataset(Dataset):
 
 ## Quick Reference
 
+**⚠️ IMPORTANT: Use V2 - Corrected Version**
+
+V1 had a critical error: it varied agents/fire but kept doors fixed, so the model couldn't learn door placement quality.
+
+**V2 fixes this**: Varies door/exit positions on the same floor plan.
+
 ```bash
-# Test locally
-python generate_training_data.py --num-floor-plans 10 --workers 4 --output-dir ./test
+# Test locally (V2 - CORRECTED)
+python generate_training_data_v2.py \
+    --num-floor-plans 10 \
+    --door-configs-per-plan 10 \
+    --workers 4 \
+    --output-dir ./test_v2
 
-# Full EPYC run
-python generate_training_data.py --num-floor-plans 5000 --workers 120 --output-dir ./data
-
-# Resume interrupted run
-python generate_training_data.py --resume ./data/checkpoint.json
+# Full EPYC run (V2 - CORRECTED)
+python generate_training_data_v2.py \
+    --num-floor-plans 1000 \
+    --door-configs-per-plan 30 \
+    --scenarios-per-config 3 \
+    --trials-per-scenario 3 \
+    --workers 120 \
+    --output-dir ./training_data_v2
 ```
+
+See `TRAINING_DATA_V2_README.md` for details on the correction.

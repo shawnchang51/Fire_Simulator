@@ -79,7 +79,8 @@ class FloorPlanGenerator:
         self,
         num_plans: int,
         size_range: Tuple[int, int] = (20, 80),
-        method_weights: Optional[Dict[str, float]] = None
+        method_weights: Optional[Dict[str, float]] = None,
+        realism_ratio: float = 0.6
     ) -> List[Tuple[np.ndarray, FloorPlanMetadata]]:
         """
         Generate a batch of diverse floor plans.
@@ -89,16 +90,23 @@ class FloorPlanGenerator:
             size_range: (min_size, max_size) for map dimensions
             method_weights: Dict mapping method names to weights
                            Default: {'bsp': 0.4, 'grid': 0.3, 'template': 0.2, 'cellular': 0.1}
+            realism_ratio: Balance between realistic (0.0-1.0) and challenging plans
+                          - 1.0 = all realistic (office, school, hospital templates)
+                          - 0.0 = all challenging (cellular, complex BSP)
+                          - 0.6 = 60% realistic, 40% challenging (default)
 
         Returns:
             List of (grid, metadata) tuples
         """
         if method_weights is None:
+            # Adjust weights based on realism_ratio
+            # Realistic: template (office, school, hospital), simple grid
+            # Challenging: cellular, complex BSP
             method_weights = {
-                'bsp': 0.4,
-                'grid': 0.3,
-                'template': 0.2,
-                'cellular': 0.1
+                'bsp': 0.25 + 0.15 * (1 - realism_ratio),      # 25-40%
+                'grid': 0.20 + 0.10 * (1 - realism_ratio),     # 20-30%
+                'template': 0.35 + 0.15 * realism_ratio,       # 35-50%
+                'cellular': 0.10 + 0.20 * (1 - realism_ratio)  # 10-30%
             }
 
         methods = list(method_weights.keys())
@@ -215,9 +223,12 @@ class FloorPlanGenerator:
         # Connect rooms with corridors
         self._connect_rooms_mst(grid, rooms, corridor_width)
 
-        # Add more internal obstacles (furniture, walls) for challenging navigation
-        obstacle_density = self.rng.uniform(0.08, 0.20)
-        self._add_obstacles(grid, obstacle_density)
+        # Add internal partitions to large rooms
+        self._add_room_partitions(grid, rooms)
+
+        # Add structured obstacles for challenging navigation
+        obstacle_density = self.rng.uniform(0.08, 0.18)
+        self._add_structured_obstacles(grid, obstacle_density, 'office_building')
 
         # Add perimeter wall
         grid[0, :] = CellType.WALL.value
@@ -247,9 +258,13 @@ class FloorPlanGenerator:
         rows, cols = size
         grid = np.full((rows, cols), CellType.WALL.value, dtype=np.float32)
 
-        # Grid divisions
-        grid_rows = self.rng.integers(2, 5)
-        grid_cols = self.rng.integers(2, 5)
+        # Scale grid divisions with map size for more complexity
+        min_dim = min(rows, cols)
+        min_divisions = max(2, min_dim // 15)  # At least 2, more for larger maps
+        max_divisions = max(3, min_dim // 8)   # Scale up with size
+
+        grid_rows = self.rng.integers(min_divisions, max_divisions + 1)
+        grid_cols = self.rng.integers(min_divisions, max_divisions + 1)
         corridor_width = self.rng.choice([1, 2])
 
         cell_h = (rows - 2) // grid_rows
@@ -283,9 +298,12 @@ class FloorPlanGenerator:
         # Connect all rooms
         self._connect_rooms_mst(grid, rooms, corridor_width)
 
-        # Add more obstacles for challenging navigation
-        obstacle_density = self.rng.uniform(0.08, 0.20)
-        self._add_obstacles(grid, obstacle_density)
+        # Add internal partitions to large rooms
+        self._add_room_partitions(grid, rooms)
+
+        # Add structured obstacles for challenging navigation
+        obstacle_density = self.rng.uniform(0.08, 0.18)
+        self._add_structured_obstacles(grid, obstacle_density, 'generic')
 
         metadata = FloorPlanMetadata(
             size=size,
@@ -311,8 +329,17 @@ class FloorPlanGenerator:
 
         corridor_width = self.rng.choice([2, 3])
 
-        # Choose template pattern
-        pattern = self.rng.choice(['corridor_central', 'l_shape', 'u_shape', 'open_office'])
+        # Choose template pattern - mix of realistic and varied layouts
+        pattern = self.rng.choice([
+            'corridor_central',   # Classic office hallway
+            'office_building',    # Realistic office with cubicles
+            'school_layout',      # Classrooms along corridor
+            'warehouse',          # Open space with aisles
+            'hospital_wing',      # Patient rooms with nurse station
+            'l_shape',
+            'u_shape',
+            'open_office'
+        ])
 
         rooms = []
 
@@ -381,6 +408,158 @@ class FloorPlanGenerator:
             # Bottom connector
             grid[rows-center_height-1:rows-1, 1:cols-1] = CellType.PASSABLE.value
 
+        elif pattern == 'office_building':
+            # Realistic office: reception, meeting rooms, cubicle area, break room
+            # Main corridor
+            corridor_y = rows // 2 - corridor_width // 2
+            grid[corridor_y:corridor_y+corridor_width, 1:cols-1] = CellType.PASSABLE.value
+
+            # Reception area (larger room at entrance)
+            reception_w = cols // 4
+            grid[corridor_y-3:corridor_y+corridor_width+3, 1:reception_w] = CellType.PASSABLE.value
+            rooms.append(Room(1, corridor_y-3, reception_w-1, corridor_width+6))
+
+            # Meeting rooms (top side, fewer but larger)
+            meeting_room_count = self.rng.integers(2, 4)
+            available_width = cols - reception_w - 2
+            meeting_w = available_width // meeting_room_count
+            for i in range(meeting_room_count):
+                x = reception_w + i * meeting_w
+                y = 1
+                h = corridor_y - 2
+                w = meeting_w - 1
+                if h >= 4 and w >= 4:
+                    room = Room(x, y, w, h)
+                    rooms.append(room)
+                    grid[y:y+h, x:x+w] = CellType.PASSABLE.value
+                    # Door
+                    door_x = x + w // 2
+                    grid[y+h:corridor_y+1, door_x] = CellType.PASSABLE.value
+
+            # Cubicle area (bottom side, open with desk obstacles added later)
+            cubicle_y = corridor_y + corridor_width + 1
+            cubicle_h = rows - cubicle_y - 2
+            cubicle_w = (cols - 2) * 2 // 3
+            if cubicle_h >= 4:
+                grid[cubicle_y:cubicle_y+cubicle_h, 1:1+cubicle_w] = CellType.PASSABLE.value
+                rooms.append(Room(1, cubicle_y, cubicle_w, cubicle_h))
+                # Connect to corridor
+                grid[corridor_y:cubicle_y+1, cubicle_w//2] = CellType.PASSABLE.value
+
+            # Break room (bottom right)
+            break_x = 1 + cubicle_w + 1
+            break_w = cols - break_x - 1
+            if break_w >= 4 and cubicle_h >= 4:
+                grid[cubicle_y:cubicle_y+cubicle_h, break_x:break_x+break_w] = CellType.PASSABLE.value
+                rooms.append(Room(break_x, cubicle_y, break_w, cubicle_h))
+                # Connect to corridor
+                grid[corridor_y:cubicle_y+1, break_x+break_w//2] = CellType.PASSABLE.value
+
+        elif pattern == 'school_layout':
+            # School: classrooms along main corridor, larger rooms at ends
+            corridor_y = rows // 2 - corridor_width // 2
+            grid[corridor_y:corridor_y+corridor_width, 1:cols-1] = CellType.PASSABLE.value
+
+            # Classrooms on both sides (uniform size)
+            classroom_count = max(2, (cols - 4) // 8)
+            classroom_w = (cols - 2) // classroom_count
+
+            for i in range(classroom_count):
+                x = 1 + i * classroom_w
+                w = classroom_w - 1
+
+                # Top classroom
+                y_top = 1
+                h_top = corridor_y - 2
+                if h_top >= 4 and w >= 4:
+                    room = Room(x, y_top, w, h_top)
+                    rooms.append(room)
+                    grid[y_top:y_top+h_top, x:x+w] = CellType.PASSABLE.value
+                    # Door (offset to side like real classrooms)
+                    door_x = x + 2
+                    grid[y_top+h_top:corridor_y+1, door_x] = CellType.PASSABLE.value
+
+                # Bottom classroom
+                y_bot = corridor_y + corridor_width + 1
+                h_bot = rows - y_bot - 1
+                if h_bot >= 4 and w >= 4:
+                    room = Room(x, y_bot, w, h_bot)
+                    rooms.append(room)
+                    grid[y_bot:y_bot+h_bot, x:x+w] = CellType.PASSABLE.value
+                    # Door
+                    door_x = x + 2
+                    grid[corridor_y+corridor_width-1:y_bot+1, door_x] = CellType.PASSABLE.value
+
+        elif pattern == 'warehouse':
+            # Warehouse: open space with regular aisles
+            grid[1:rows-1, 1:cols-1] = CellType.PASSABLE.value
+            rooms.append(Room(1, 1, cols-2, rows-2))
+
+            # Create shelf aisles (vertical walls with gaps)
+            aisle_spacing = self.rng.integers(6, 10)
+            shelf_depth = self.rng.integers(2, 4)
+
+            for x in range(aisle_spacing, cols - aisle_spacing, aisle_spacing):
+                for y in range(3, rows - 3):
+                    # Leave gaps for cross-aisles
+                    if y % (rows // 3) < 2:
+                        continue
+                    if x + shelf_depth < cols - 1:
+                        grid[y, x:x+shelf_depth] = CellType.WALL.value
+
+        elif pattern == 'hospital_wing':
+            # Hospital: patient rooms on one side, nurse station, utility rooms
+            corridor_y = rows // 3
+            corridor_h = corridor_width + 1
+            grid[corridor_y:corridor_y+corridor_h, 1:cols-1] = CellType.PASSABLE.value
+
+            # Patient rooms (top, uniform small rooms)
+            patient_room_w = max(4, (cols - 2) // 6)
+            patient_room_count = (cols - 2) // patient_room_w
+
+            for i in range(patient_room_count):
+                x = 1 + i * patient_room_w
+                y = 1
+                h = corridor_y - 1
+                w = patient_room_w - 1
+                if h >= 3 and w >= 3:
+                    room = Room(x, y, w, h)
+                    rooms.append(room)
+                    grid[y:y+h, x:x+w] = CellType.PASSABLE.value
+                    # Door
+                    door_x = x + w // 2
+                    grid[y+h:corridor_y+1, door_x] = CellType.PASSABLE.value
+
+            # Nurse station (central, below corridor)
+            station_y = corridor_y + corridor_h
+            station_h = (rows - station_y - 1) // 2
+            station_w = cols // 3
+            station_x = (cols - station_w) // 2
+            if station_h >= 3:
+                grid[station_y:station_y+station_h, station_x:station_x+station_w] = CellType.PASSABLE.value
+                rooms.append(Room(station_x, station_y, station_w, station_h))
+                # Connect to corridor
+                grid[corridor_y+corridor_h-1:station_y+1, station_x+station_w//2] = CellType.PASSABLE.value
+
+            # Utility rooms on sides (bottom)
+            util_y = station_y + station_h + 1
+            util_h = rows - util_y - 1
+            if util_h >= 3:
+                # Left utility
+                util_w = station_x - 2
+                if util_w >= 3:
+                    grid[util_y:util_y+util_h, 1:1+util_w] = CellType.PASSABLE.value
+                    rooms.append(Room(1, util_y, util_w, util_h))
+                    grid[station_y:util_y+1, util_w//2] = CellType.PASSABLE.value
+
+                # Right utility
+                right_x = station_x + station_w + 1
+                right_w = cols - right_x - 1
+                if right_w >= 3:
+                    grid[util_y:util_y+util_h, right_x:right_x+right_w] = CellType.PASSABLE.value
+                    rooms.append(Room(right_x, util_y, right_w, util_h))
+                    grid[station_y:util_y+1, right_x+right_w//2] = CellType.PASSABLE.value
+
         else:  # open_office
             # Large open space with scattered columns/obstacles
             grid[1:rows-1, 1:cols-1] = CellType.PASSABLE.value
@@ -394,9 +573,13 @@ class FloorPlanGenerator:
                 col_size = self.rng.integers(1, 3)
                 grid[cy:cy+col_size, cx:cx+col_size] = CellType.WALL.value
 
-        # Add more internal obstacles for challenging navigation
-        obstacle_density = self.rng.uniform(0.10, 0.25)
-        self._add_obstacles(grid, obstacle_density)
+        # Add structured obstacles (furniture) for realistic layouts
+        # Use lower density for already-structured templates
+        if pattern in ['warehouse', 'hospital_wing', 'school_layout']:
+            obstacle_density = self.rng.uniform(0.03, 0.08)
+        else:
+            obstacle_density = self.rng.uniform(0.08, 0.15)
+        self._add_structured_obstacles(grid, obstacle_density, pattern)
 
         metadata = FloorPlanMetadata(
             size=size,
@@ -551,6 +734,128 @@ class FloorPlanGenerator:
 
         return False
 
+    def _add_room_partitions(self, grid: np.ndarray, rooms: List[Room]):
+        """
+        Add internal partitions to large rooms to create sub-spaces.
+        Makes navigation more interesting and realistic.
+        """
+        min_area_for_partition = 80  # Only partition rooms larger than this
+
+        for room in rooms:
+            if room.area < min_area_for_partition:
+                continue
+
+            # Probability of adding partition increases with room size
+            partition_prob = min(0.8, room.area / 200)
+            if self.rng.random() > partition_prob:
+                continue
+
+            # Choose partition style
+            if room.width > room.height * 1.5:
+                # Wide room: vertical partition
+                self._add_vertical_partition(grid, room)
+            elif room.height > room.width * 1.5:
+                # Tall room: horizontal partition
+                self._add_horizontal_partition(grid, room)
+            else:
+                # Square-ish room: random or L-shaped partition
+                if self.rng.random() < 0.5:
+                    if self.rng.random() < 0.5:
+                        self._add_vertical_partition(grid, room)
+                    else:
+                        self._add_horizontal_partition(grid, room)
+                else:
+                    self._add_l_partition(grid, room)
+
+    def _add_vertical_partition(self, grid: np.ndarray, room: Room):
+        """Add vertical partition wall with doorway"""
+        # Position partition at 1/3 or 2/3 of room width
+        offset_ratio = self.py_random.choice([1/3, 1/2, 2/3])
+        px = room.x + int(room.width * offset_ratio)
+
+        # Leave doorway (1-2 cells)
+        door_size = self.rng.integers(1, 3)
+        door_start = room.y + self.rng.integers(1, max(2, room.height - door_size - 1))
+
+        for y in range(room.y, room.y + room.height):
+            if door_start <= y < door_start + door_size:
+                continue  # Doorway
+            if 0 < y < grid.shape[0] - 1 and 0 < px < grid.shape[1] - 1:
+                grid[y, px] = CellType.WALL.value
+
+    def _add_horizontal_partition(self, grid: np.ndarray, room: Room):
+        """Add horizontal partition wall with doorway"""
+        offset_ratio = self.py_random.choice([1/3, 1/2, 2/3])
+        py = room.y + int(room.height * offset_ratio)
+
+        door_size = self.rng.integers(1, 3)
+        door_start = room.x + self.rng.integers(1, max(2, room.width - door_size - 1))
+
+        for x in range(room.x, room.x + room.width):
+            if door_start <= x < door_start + door_size:
+                continue  # Doorway
+            if 0 < py < grid.shape[0] - 1 and 0 < x < grid.shape[1] - 1:
+                grid[py, x] = CellType.WALL.value
+
+    def _add_l_partition(self, grid: np.ndarray, room: Room):
+        """Add L-shaped partition to create corner space"""
+        # Choose corner
+        corner = self.py_random.choice(['top_left', 'top_right', 'bottom_left', 'bottom_right'])
+
+        # Partition size (1/3 to 1/2 of room)
+        h_len = int(room.width * self.rng.uniform(0.3, 0.5))
+        v_len = int(room.height * self.rng.uniform(0.3, 0.5))
+
+        if corner == 'top_left':
+            px, py = room.x + h_len, room.y
+            # Vertical part
+            for y in range(room.y, room.y + v_len):
+                if 0 < y < grid.shape[0] - 1 and 0 < px < grid.shape[1] - 1:
+                    grid[y, px] = CellType.WALL.value
+            # Horizontal part (with gap)
+            py = room.y + v_len
+            for x in range(room.x, px):
+                if x == room.x + h_len // 2:
+                    continue  # Doorway
+                if 0 < py < grid.shape[0] - 1 and 0 < x < grid.shape[1] - 1:
+                    grid[py, x] = CellType.WALL.value
+
+        elif corner == 'top_right':
+            px = room.x + room.width - h_len
+            for y in range(room.y, room.y + v_len):
+                if 0 < y < grid.shape[0] - 1 and 0 < px < grid.shape[1] - 1:
+                    grid[y, px] = CellType.WALL.value
+            py = room.y + v_len
+            for x in range(px + 1, room.x + room.width):
+                if x == px + h_len // 2:
+                    continue
+                if 0 < py < grid.shape[0] - 1 and 0 < x < grid.shape[1] - 1:
+                    grid[py, x] = CellType.WALL.value
+
+        elif corner == 'bottom_left':
+            px = room.x + h_len
+            for y in range(room.y + room.height - v_len, room.y + room.height):
+                if 0 < y < grid.shape[0] - 1 and 0 < px < grid.shape[1] - 1:
+                    grid[y, px] = CellType.WALL.value
+            py = room.y + room.height - v_len
+            for x in range(room.x, px):
+                if x == room.x + h_len // 2:
+                    continue
+                if 0 < py < grid.shape[0] - 1 and 0 < x < grid.shape[1] - 1:
+                    grid[py, x] = CellType.WALL.value
+
+        else:  # bottom_right
+            px = room.x + room.width - h_len
+            for y in range(room.y + room.height - v_len, room.y + room.height):
+                if 0 < y < grid.shape[0] - 1 and 0 < px < grid.shape[1] - 1:
+                    grid[y, px] = CellType.WALL.value
+            py = room.y + room.height - v_len
+            for x in range(px + 1, room.x + room.width):
+                if x == px + h_len // 2:
+                    continue
+                if 0 < py < grid.shape[0] - 1 and 0 < x < grid.shape[1] - 1:
+                    grid[py, x] = CellType.WALL.value
+
     def _merge_rooms(
         self,
         grid: np.ndarray,
@@ -590,27 +895,192 @@ class FloorPlanGenerator:
                 grid[y, x] = CellType.PASSABLE.value
 
     def _add_obstacles(self, grid: np.ndarray, density: float):
-        """Add random internal obstacles (furniture, columns)"""
+        """Add random internal obstacles (furniture, columns) - legacy method"""
+        # Delegate to structured obstacles for better quality
+        self._add_structured_obstacles(grid, density, 'generic')
+
+    def _add_structured_obstacles(self, grid: np.ndarray, density: float, context: str = 'generic'):
+        """
+        Add structured obstacles that create meaningful navigation challenges.
+
+        Args:
+            grid: Floor plan grid
+            density: Target obstacle density (0.0-1.0)
+            context: Layout context for appropriate furniture types
+        """
         rows, cols = grid.shape
-        passable = np.argwhere(grid == CellType.PASSABLE.value)
+        passable_coords = np.argwhere(grid == CellType.PASSABLE.value)
 
-        num_obstacles = int(len(passable) * density)
+        if len(passable_coords) == 0:
+            return
 
-        for _ in range(num_obstacles):
-            if len(passable) == 0:
-                break
+        target_obstacles = int(len(passable_coords) * density)
+        placed = 0
+        max_attempts = target_obstacles * 3
+        attempts = 0
 
-            idx = self.rng.integers(len(passable))
-            y, x = passable[idx]
+        # Context-appropriate obstacle types
+        if context in ['office_building', 'open_office']:
+            obstacle_types = ['desk_cluster', 'desk_row', 'meeting_table', 'cubicle_wall']
+        elif context == 'school_layout':
+            obstacle_types = ['desk_row', 'desk_cluster', 'teacher_desk']
+        elif context == 'warehouse':
+            obstacle_types = ['shelf_unit', 'pallet']
+        elif context == 'hospital_wing':
+            obstacle_types = ['bed', 'equipment', 'desk']
+        else:
+            obstacle_types = ['wall_segment', 'furniture_block', 'l_shape', 'desk_row']
 
-            # Small obstacle (1-2 cells)
-            size = self.rng.choice([1, 1, 1, 2])
-            for dy in range(size):
-                for dx in range(size):
+        while placed < target_obstacles and attempts < max_attempts:
+            attempts += 1
+
+            idx = self.rng.integers(len(passable_coords))
+            y, x = passable_coords[idx]
+
+            # Skip cells too close to edges
+            if y < 3 or y > rows - 4 or x < 3 or x > cols - 4:
+                continue
+
+            obs_type = self.py_random.choice(obstacle_types)
+            cells_placed = self._place_obstacle(grid, y, x, obs_type, rows, cols)
+            placed += cells_placed
+
+    def _place_obstacle(self, grid: np.ndarray, y: int, x: int, obs_type: str, rows: int, cols: int) -> int:
+        """Place a single structured obstacle, return number of cells placed"""
+        cells_placed = 0
+
+        if obs_type == 'wall_segment':
+            # Horizontal or vertical wall segment (3-6 cells) - creates chokepoints
+            length = self.rng.integers(3, 7)
+            horizontal = self.rng.random() < 0.5
+            for i in range(length):
+                ny, nx = (y, x + i) if horizontal else (y + i, x)
+                if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                    if grid[ny, nx] == CellType.PASSABLE.value:
+                        grid[ny, nx] = CellType.WALL.value
+                        cells_placed += 1
+
+        elif obs_type == 'furniture_block':
+            # 2x2 or 2x3 solid block (desk, table)
+            bh, bw = self.py_random.choice([(2, 2), (2, 3), (3, 2)])
+            for dy in range(bh):
+                for dx in range(bw):
                     ny, nx = y + dy, x + dx
                     if 0 < ny < rows - 1 and 0 < nx < cols - 1:
                         if grid[ny, nx] == CellType.PASSABLE.value:
                             grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        elif obs_type == 'l_shape':
+            # L-shaped obstacle - blocks diagonal shortcuts
+            pattern = self.py_random.choice([
+                [(0, 0), (0, 1), (1, 0)],           # └
+                [(0, 0), (0, 1), (1, 1)],           # ┘
+                [(0, 0), (1, 0), (1, 1)],           # ┐
+                [(0, 1), (1, 0), (1, 1)],           # ┌
+                [(0, 0), (0, 1), (0, 2), (1, 0)],   # Larger └
+                [(0, 0), (1, 0), (2, 0), (2, 1)],   # Larger ┐
+            ])
+            for dy, dx in pattern:
+                ny, nx = y + dy, x + dx
+                if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                    if grid[ny, nx] == CellType.PASSABLE.value:
+                        grid[ny, nx] = CellType.WALL.value
+                        cells_placed += 1
+
+        elif obs_type == 'desk_row':
+            # Row of desks with gaps (realistic office)
+            length = self.rng.integers(4, 8)
+            horizontal = self.rng.random() < 0.5
+            for i in range(length):
+                if i % 3 == 2:  # Gap every 3rd cell for walkway
+                    continue
+                ny, nx = (y, x + i) if horizontal else (y + i, x)
+                if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                    if grid[ny, nx] == CellType.PASSABLE.value:
+                        grid[ny, nx] = CellType.WALL.value
+                        cells_placed += 1
+
+        elif obs_type == 'desk_cluster':
+            # 2x2 cluster of desks (4 people facing each other)
+            for dy in range(2):
+                for dx in range(3):
+                    if dx == 1:  # Middle gap
+                        continue
+                    ny, nx = y + dy, x + dx
+                    if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                        if grid[ny, nx] == CellType.PASSABLE.value:
+                            grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        elif obs_type == 'cubicle_wall':
+            # Cubicle partition walls (T or + shape)
+            pattern = self.py_random.choice([
+                [(0, 0), (0, 1), (0, 2), (1, 1)],           # T shape
+                [(0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],   # + shape
+                [(0, 0), (1, 0), (2, 0), (1, 1), (1, 2)],   # ├ shape
+            ])
+            for dy, dx in pattern:
+                ny, nx = y + dy, x + dx
+                if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                    if grid[ny, nx] == CellType.PASSABLE.value:
+                        grid[ny, nx] = CellType.WALL.value
+                        cells_placed += 1
+
+        elif obs_type == 'meeting_table':
+            # Rectangular meeting table (2x4 or 2x5)
+            length = self.rng.integers(4, 6)
+            for dy in range(2):
+                for dx in range(length):
+                    ny, nx = y + dy, x + dx
+                    if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                        if grid[ny, nx] == CellType.PASSABLE.value:
+                            grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        elif obs_type == 'shelf_unit':
+            # Warehouse shelf (long vertical structure)
+            length = self.rng.integers(4, 8)
+            width = self.rng.integers(1, 3)
+            for dy in range(length):
+                for dx in range(width):
+                    ny, nx = y + dy, x + dx
+                    if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                        if grid[ny, nx] == CellType.PASSABLE.value:
+                            grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        elif obs_type == 'pallet':
+            # Small pallet/box (2x2)
+            for dy in range(2):
+                for dx in range(2):
+                    ny, nx = y + dy, x + dx
+                    if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                        if grid[ny, nx] == CellType.PASSABLE.value:
+                            grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        elif obs_type == 'bed':
+            # Hospital bed (2x3)
+            for dy in range(2):
+                for dx in range(3):
+                    ny, nx = y + dy, x + dx
+                    if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                        if grid[ny, nx] == CellType.PASSABLE.value:
+                            grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        elif obs_type in ['equipment', 'desk', 'teacher_desk']:
+            # Generic 2x2 equipment/desk
+            for dy in range(2):
+                for dx in range(2):
+                    ny, nx = y + dy, x + dx
+                    if 0 < ny < rows - 1 and 0 < nx < cols - 1:
+                        if grid[ny, nx] == CellType.PASSABLE.value:
+                            grid[ny, nx] = CellType.WALL.value
+                            cells_placed += 1
+
+        return cells_placed
 
     def _keep_largest_component(self, grid: np.ndarray) -> np.ndarray:
         """Keep only the largest connected passable area"""
@@ -778,7 +1248,8 @@ class FloorPlanGenerator:
 def generate_diverse_plans(
     num_plans: int = 1000,
     seed: int = 42,
-    size_range: Tuple[int, int] = (20, 80)
+    size_range: Tuple[int, int] = (20, 80),
+    realism_ratio: float = 0.6
 ) -> List[Tuple[np.ndarray, FloorPlanMetadata]]:
     """
     Convenience function to generate diverse floor plans.
@@ -787,34 +1258,64 @@ def generate_diverse_plans(
         num_plans: Number of plans to generate
         seed: Random seed for reproducibility
         size_range: (min_size, max_size) for map dimensions
+        realism_ratio: Balance between realistic and challenging plans (0.0-1.0)
+                      - 1.0 = mostly realistic building layouts
+                      - 0.0 = mostly challenging/irregular layouts
+                      - 0.6 = balanced mix (default)
 
     Returns:
         List of (grid, metadata) tuples
     """
     generator = FloorPlanGenerator(seed=seed)
-    return generator.generate_batch(num_plans, size_range)
+    return generator.generate_batch(num_plans, size_range, realism_ratio=realism_ratio)
 
 
 if __name__ == '__main__':
     # Test generation
-    print("Generating sample floor plans...")
+    print("=" * 60)
+    print("Floor Plan Generator - Test Suite")
+    print("=" * 60)
 
     generator = FloorPlanGenerator(seed=42)
-    plans = generator.generate_batch(10, size_range=(30, 60))
 
-    for i, (grid, meta) in enumerate(plans):
-        print(f"\nPlan {i+1}:")
-        print(f"  Size: {meta.size}")
-        print(f"  Rooms: {meta.room_count}")
-        print(f"  Method: {meta.generation_method}")
-        print(f"  Obstacle density: {meta.obstacle_density:.2%}")
+    # Test with different realism ratios
+    print("\n--- Testing with realism_ratio=0.8 (mostly realistic) ---")
+    plans_realistic = generator.generate_batch(5, size_range=(35, 50), realism_ratio=0.8)
 
-        # Add exits
-        exits = generator.add_exits_to_plan(grid, num_exits=2)
-        print(f"  Exits: {exits}")
+    for i, (grid, meta) in enumerate(plans_realistic):
+        print(f"\nPlan {i+1}: {meta.generation_method}")
+        print(f"  Size: {meta.size}, Rooms: {meta.room_count}")
+        print(f"  Obstacle density: {meta.obstacle_density:.1%}")
 
-        # Show small preview
-        preview = grid[:10, :10]
-        print("  Preview (10x10):")
-        for row in preview:
+        # Show preview
+        preview_rows = min(12, grid.shape[0])
+        preview_cols = min(25, grid.shape[1])
+        print(f"  Preview ({preview_rows}x{preview_cols}):")
+        for row in grid[:preview_rows, :preview_cols]:
             print("    " + "".join(['#' if c == -2 else '.' for c in row]))
+
+    print("\n--- Testing with realism_ratio=0.2 (mostly challenging) ---")
+    generator2 = FloorPlanGenerator(seed=123)
+    plans_challenging = generator2.generate_batch(5, size_range=(35, 50), realism_ratio=0.2)
+
+    for i, (grid, meta) in enumerate(plans_challenging):
+        print(f"\nPlan {i+1}: {meta.generation_method}")
+        print(f"  Size: {meta.size}, Rooms: {meta.room_count}")
+        print(f"  Obstacle density: {meta.obstacle_density:.1%}")
+
+        preview_rows = min(12, grid.shape[0])
+        preview_cols = min(25, grid.shape[1])
+        print(f"  Preview ({preview_rows}x{preview_cols}):")
+        for row in grid[:preview_rows, :preview_cols]:
+            print("    " + "".join(['#' if c == -2 else '.' for c in row]))
+
+    # Method distribution summary
+    print("\n--- Method Distribution Summary ---")
+    generator3 = FloorPlanGenerator(seed=999)
+    test_plans = generator3.generate_batch(100, size_range=(30, 60), realism_ratio=0.6)
+    method_counts = {}
+    for _, meta in test_plans:
+        method_counts[meta.generation_method] = method_counts.get(meta.generation_method, 0) + 1
+    print("100 plans with realism_ratio=0.6:")
+    for method, count in sorted(method_counts.items()):
+        print(f"  {method}: {count}%")

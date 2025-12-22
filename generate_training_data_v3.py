@@ -371,105 +371,117 @@ class TrainingDataGeneratorV3:
         Evaluate door configurations using monte carlo phase2.
         This properly randomizes agents/fire across runs.
         """
-        tasks = []
-
-        for plan_id, (grid, metadata) in self.floor_plans.items():
-            # Generate door configurations for this floor plan
-            candidate_gen = CandidateGenerator(
-                floor_plan=grid,
-                min_door_spacing=self.config.min_door_spacing,
-                seed=self.config.seed + plan_id
-            )
-
-            door_configs = candidate_gen.generate_candidate_pool(
-                num_candidates=self.config.door_configs_per_plan,
-                num_doors_range=self.config.num_doors_range,
-                num_exits_range=self.config.num_exits_range,
-                random_ratio=0.5
-            )
-
-            # Create evaluation tasks with parameter ranges for randomization
-            mc_params = {
-                'monte_carlo_runs': self.config.monte_carlo_runs_per_config,
-                'occupant_density_range': self.config.occupant_density_range,
-                'num_fires_range': self.config.num_fires_range,
-                'fire_spread_rate_range': self.config.fire_spread_rate_range,
-                'fire_intensity_growth_range': self.config.fire_intensity_growth_range,
-                'fire_discovery_delay_range': self.config.fire_discovery_delay_range,
-                'fire_damage_threshold': self.config.fire_damage_threshold,  # Fixed
-                'max_steps': self.config.max_steps
-            }
-
-            for config_id, door_config in enumerate(door_configs):
-                tasks.append((plan_id, config_id, grid.tolist(), door_config, mc_params))
-
-        logger.info(f"  Evaluating {len(tasks)} door configurations...")
-
-        # Run evaluations in parallel
+        # Process floor plans one at a time to avoid memory leak from batching all tasks
+        total_tasks = len(self.floor_plans) * self.config.door_configs_per_plan
         completed = 0
         start_time = time.time()
         results_file = os.path.join(self.config.output_dir, 'simulation_results.jsonl')
 
+        logger.info(f"  Evaluating {total_tasks} door configurations...")
+
+        # Monte Carlo parameters (shared across all evaluations)
+        mc_params = {
+            'monte_carlo_runs': self.config.monte_carlo_runs_per_config,
+            'occupant_density_range': self.config.occupant_density_range,
+            'num_fires_range': self.config.num_fires_range,
+            'fire_spread_rate_range': self.config.fire_spread_rate_range,
+            'fire_intensity_growth_range': self.config.fire_intensity_growth_range,
+            'fire_discovery_delay_range': self.config.fire_discovery_delay_range,
+            'fire_damage_threshold': self.config.fire_damage_threshold,  # Fixed
+            'max_steps': self.config.max_steps
+        }
+
         with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
-            futures = {executor.submit(evaluate_door_config_monte_carlo, task): task[0]
-                      for task in tasks}
+            # Process one floor plan at a time to avoid memory leak
+            for plan_id, (grid, metadata) in self.floor_plans.items():
+                # Generate door configurations for this floor plan
+                candidate_gen = CandidateGenerator(
+                    floor_plan=grid,
+                    min_door_spacing=self.config.min_door_spacing,
+                    seed=self.config.seed + plan_id
+                )
 
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
+                door_configs = candidate_gen.generate_candidate_pool(
+                    num_candidates=self.config.door_configs_per_plan,
+                    num_doors_range=self.config.num_doors_range,
+                    num_exits_range=self.config.num_exits_range,
+                    random_ratio=0.5
+                )
 
-                    if 'error' not in result:
-                        # Convert to SimulationResult
-                        sim_result = SimulationResult(
-                            floor_plan_id=result['floor_plan_id'],
-                            config_id=result['config_id'],
-                            config={'door_config': result['door_config']},
-                            scenario={'monte_carlo_runs': result['num_runs']},
-                            survival_rate=result['survival_rate'],
-                            avg_evacuation_time=result['avg_steps'] * 0.5,
-                            steps=int(result['avg_steps']),
-                            evacuated=result['evacuated'],
-                            stuck=result['survived'] - result['evacuated'],
-                            dead=0,  # Calculated from survival rate
-                            avg_fire_damage=result['avg_fire_damage']
-                        )
-                        self.all_results.append(sim_result)
+                # Create tasks for this floor plan only
+                grid_list = grid.tolist()
+                tasks = [
+                    (plan_id, config_id, grid_list, door_config, mc_params)
+                    for config_id, door_config in enumerate(door_configs)
+                ]
 
-                        # Save result immediately to disk
-                        with open(results_file, 'a') as f:
-                            import json
-                            result_dict = {
-                                'floor_plan_id': sim_result.floor_plan_id,
-                                'config_id': sim_result.config_id,
-                                'config': sim_result.config,
-                                'scenario': sim_result.scenario,
-                                'survival_rate': sim_result.survival_rate,
-                                'avg_evacuation_time': sim_result.avg_evacuation_time,
-                                'steps': sim_result.steps,
-                                'evacuated': sim_result.evacuated,
-                                'stuck': sim_result.stuck,
-                                'dead': sim_result.dead,
-                                'avg_fire_damage': sim_result.avg_fire_damage,
-                                'score': sim_result.score
-                            }
-                            f.write(json.dumps(result_dict) + '\n')
+                # Submit tasks for this floor plan
+                futures = {executor.submit(evaluate_door_config_monte_carlo, task): task
+                          for task in tasks}
 
-                    completed += 1
+                # Process results for this floor plan
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
 
-                    if completed % 100 == 0:
-                        elapsed = time.time() - start_time
-                        rate = completed / elapsed
-                        remaining = len(tasks) - completed
-                        eta = remaining / rate if rate > 0 else 0
-                        logger.info(f"  Completed {completed}/{len(tasks)} configs "
-                                  f"({len(self.all_results)} valid) - ETA: {timedelta(seconds=int(eta))}")
+                        if 'error' not in result:
+                            # Convert to SimulationResult
+                            sim_result = SimulationResult(
+                                floor_plan_id=result['floor_plan_id'],
+                                config_id=result['config_id'],
+                                config={'door_config': result['door_config']},
+                                scenario={'monte_carlo_runs': result['num_runs']},
+                                survival_rate=result['survival_rate'],
+                                avg_evacuation_time=result['avg_steps'] * 0.5,
+                                steps=int(result['avg_steps']),
+                                evacuated=result['evacuated'],
+                                stuck=result['survived'] - result['evacuated'],
+                                dead=0,  # Calculated from survival rate
+                                avg_fire_damage=result['avg_fire_damage']
+                            )
+                            self.all_results.append(sim_result)
 
-                        # Save checkpoint metadata
-                        if completed % self.config.checkpoint_interval == 0:
-                            self._save_checkpoint_metadata(completed, len(tasks))
+                            # Save result immediately to disk
+                            with open(results_file, 'a') as f:
+                                result_dict = {
+                                    'floor_plan_id': sim_result.floor_plan_id,
+                                    'config_id': sim_result.config_id,
+                                    'config': sim_result.config,
+                                    'scenario': sim_result.scenario,
+                                    'survival_rate': sim_result.survival_rate,
+                                    'avg_evacuation_time': sim_result.avg_evacuation_time,
+                                    'steps': sim_result.steps,
+                                    'evacuated': sim_result.evacuated,
+                                    'stuck': sim_result.stuck,
+                                    'dead': sim_result.dead,
+                                    'avg_fire_damage': sim_result.avg_fire_damage,
+                                    'score': sim_result.score
+                                }
+                                f.write(json.dumps(result_dict) + '\n')
 
-                except Exception as e:
-                    logger.error(f"Task failed: {e}")
+                        completed += 1
+
+                        if completed % 100 == 0:
+                            elapsed = time.time() - start_time
+                            rate = completed / elapsed
+                            remaining = total_tasks - completed
+                            eta = remaining / rate if rate > 0 else 0
+                            logger.info(f"  Completed {completed}/{total_tasks} configs "
+                                      f"({len(self.all_results)} valid) - ETA: {timedelta(seconds=int(eta))}")
+
+                            # Save checkpoint metadata
+                            if completed % self.config.checkpoint_interval == 0:
+                                self._save_checkpoint_metadata(completed, total_tasks)
+
+                    except Exception as e:
+                        logger.error(f"Task failed: {e}")
+
+                # Clear tasks list after processing this floor plan to free memory
+                del tasks
+                del grid_list
+
+                if (plan_id + 1) % 10 == 0:
+                    logger.info(f"  Processed floor plan {plan_id + 1}/{len(self.floor_plans)}")
 
         logger.info(f"  Evaluated {len(self.all_results)} door configurations")
         logger.info(f"  Results saved to {results_file}")

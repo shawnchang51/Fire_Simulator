@@ -100,13 +100,13 @@ class FloorPlanGenerator:
         """
         if method_weights is None:
             # Adjust weights based on realism_ratio
-            # Realistic: template (office, school, hospital), grid
-            # Challenging: complex BSP
+            # Balanced: BSP (challenging mazes), Grid (structured), Template (realistic)
             # Cellular: minimized (too cave-like, not building-like)
+            # Note: Template validates more easily, so weight lower for actual 30-40% output
             method_weights = {
-                'bsp': 0.30 + 0.20 * (1 - realism_ratio),      # 30-50%
-                'grid': 0.25 + 0.10 * (1 - realism_ratio),     # 25-35%
-                'template': 0.40 + 0.15 * realism_ratio,       # 40-55%
+                'bsp': 0.45 + 0.15 * (1 - realism_ratio),      # 45-60% (challenging mazes)
+                'grid': 0.30 + 0.10 * (1 - realism_ratio),     # 30-40% (structured rooms)
+                'template': 0.20 + 0.05 * realism_ratio,       # 20-25% (realistic, but boring)
                 'cellular': 0.05                                # 5% (minimal, for variety only)
             }
 
@@ -339,21 +339,19 @@ class FloorPlanGenerator:
 
         corridor_width = self.rng.choice([2, 3])
 
-        # Choose template pattern - prioritize realistic and challenging patterns
-        # Reduce easy L/U shapes, focus on complex realistic layouts
+        # Choose template pattern - prioritize multi-room realistic patterns
+        # Remove boring single-room patterns (warehouse, open_office)
         patterns = [
-            'corridor_central',   # Classic office hallway
-            'office_building',    # Realistic office with cubicles
-            'school_layout',      # Classrooms along corridor
-            'warehouse',          # Open space with aisles
-            'hospital_wing',      # Patient rooms with nurse station
-            'open_office'         # Open space with columns
+            'corridor_central',   # Office hallway with varied rooms - MULTI-ROOM
+            'office_building',    # Realistic office with cubicles - MULTI-ROOM
+            'school_layout',      # Classrooms along corridor - MULTI-ROOM
+            'hospital_wing',      # Patient rooms with nurse station - MULTI-ROOM
         ]
-        weights = [0.20, 0.25, 0.20, 0.15, 0.15, 0.05]  # Prioritize complex patterns
+        weights = [0.30, 0.35, 0.30, 0.05]  # Focus on complex multi-room layouts
 
-        # Only 5% chance for easy L/U shapes (for variety)
-        if self.rng.random() < 0.05:
-            pattern = self.rng.choice(['l_shape', 'u_shape'])
+        # Only 3% chance for easy L/U shapes or single-room layouts (minimal variety)
+        if self.rng.random() < 0.03:
+            pattern = self.rng.choice(['l_shape', 'u_shape', 'warehouse'])
         else:
             pattern = self.py_random.choices(patterns, weights=weights)[0]
 

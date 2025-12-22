@@ -177,34 +177,38 @@ def run_simulation_batch(args: Tuple) -> List[Dict[str, Any]]:
 
             for trial in range(sim_config.get('trials_per_config', 3)):
                 try:
-                    # Create simulation config dict
-                    config = {
-                        'map_rows': grid.shape[0],
-                        'map_cols': grid.shape[1],
-                        'cell_size': 0.3,
-                        'timestep_duration': 0.5,
-                        'fire_update_interval': 2,
-                        'agent_num': len(agent_positions),
-                        'max_occupancy': 2,
-                        'viewing_range': 10,
-                        'fire_spread_rate': fire_spread_rate,
-                        'fire_intensity_growth': 0.5,
-                        'fire_damage_threshold': 10.0,
-                        'fire_discovery_delay': fire_discovery_delay,
-                        'max_steps': sim_config.get('max_steps', 500)
-                    }
+                    max_steps = sim_config.get('max_steps', 500)
 
-                    # Run simulation
+                    # Convert positions to tuples (FastEvacuationSim requires tuples)
+                    agent_starts_tuples = [tuple(pos) if not isinstance(pos, tuple) else pos for pos in agent_positions]
+                    exits_tuples = [tuple(pos) if not isinstance(pos, tuple) else pos for pos in exit_positions]
+                    fire_starts_tuples = [tuple(pos) if not isinstance(pos, tuple) else pos for pos in fire_positions]
+
+                    # Map fire spread mode from config to enum value
+                    spread_mode = sim_config.get('fire_spread_mode', 'ALWAYS_REAL').lower().replace('_', '_')
+                    # Convert ALWAYS_REAL → always_real
+                    if spread_mode == 'always_real' or spread_mode == 'always real':
+                        spread_mode = 'always_real'
+                    elif spread_mode == 'real_then_simple' or spread_mode == 'real then simple':
+                        spread_mode = 'real_then_simple'
+                    elif spread_mode == 'real_then_stop' or spread_mode == 'real then stop':
+                        spread_mode = 'real_then_stop'
+
+                    # Run simulation with correct API
                     sim = FastEvacuationSim(
                         grid=grid.copy(),
-                        agent_positions=agent_positions,
-                        exit_positions=exit_positions,
-                        fire_positions=fire_positions,
-                        config=config,
-                        seed=sim_config.get('seed', 42) + trial + config_id * 100
+                        agent_starts=agent_starts_tuples,
+                        exits=exits_tuples,
+                        fire_starts=fire_starts_tuples,
+                        fire_update_interval=2,
+                        fire_discovery_delay=fire_discovery_delay,
+                        fire_spread_mode=spread_mode,
+                        fire_spread_rate=fire_spread_rate,
+                        fire_intensity_growth=0.5,
+                        fire_damage_threshold=10.0
                     )
 
-                    result = sim.run(max_steps=config['max_steps'])
+                    result = sim.run(max_steps=max_steps)
 
                     trial_results.append({
                         'survival_rate': result.survival_rate,
@@ -217,8 +221,11 @@ def run_simulation_batch(args: Tuple) -> List[Dict[str, Any]]:
                     })
 
                 except Exception as e:
+                    import traceback
+                    error_msg = f"{str(e)}\n{traceback.format_exc()}"
+                    logger.error(f"Trial {trial} failed: {error_msg}")
                     trial_results.append({
-                        'error': str(e),
+                        'error': error_msg,
                         'survival_rate': 0,
                         'steps': 0
                     })

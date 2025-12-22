@@ -11,6 +11,7 @@ CLAUDE.md
 configs/
 monte_carlo_results/
 test_v3*/
+sample_floor_plans/
 
 # Virtual environments
 venv/

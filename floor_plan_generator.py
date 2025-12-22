@@ -100,13 +100,14 @@ class FloorPlanGenerator:
         """
         if method_weights is None:
             # Adjust weights based on realism_ratio
-            # Realistic: template (office, school, hospital), simple grid
-            # Challenging: cellular, complex BSP
+            # Realistic: template (office, school, hospital), grid
+            # Challenging: complex BSP
+            # Cellular: minimized (too cave-like, not building-like)
             method_weights = {
-                'bsp': 0.25 + 0.15 * (1 - realism_ratio),      # 25-40%
-                'grid': 0.20 + 0.10 * (1 - realism_ratio),     # 20-30%
-                'template': 0.35 + 0.15 * realism_ratio,       # 35-50%
-                'cellular': 0.10 + 0.20 * (1 - realism_ratio)  # 10-30%
+                'bsp': 0.30 + 0.20 * (1 - realism_ratio),      # 30-50%
+                'grid': 0.25 + 0.10 * (1 - realism_ratio),     # 25-35%
+                'template': 0.40 + 0.15 * realism_ratio,       # 40-55%
+                'cellular': 0.05                                # 5% (minimal, for variety only)
             }
 
         methods = list(method_weights.keys())
@@ -277,8 +278,17 @@ class FloorPlanGenerator:
             for gc in range(grid_cols):
                 y = 1 + gr * cell_h
                 x = 1 + gc * cell_w
-                h = cell_h - 1
-                w = cell_w - 1
+
+                # For last row/column, extend to edge to avoid thick perimeter walls
+                if gr == grid_rows - 1:
+                    h = rows - y - 1  # Extend to bottom edge
+                else:
+                    h = cell_h - 1
+
+                if gc == grid_cols - 1:
+                    w = cols - x - 1  # Extend to right edge
+                else:
+                    w = cell_w - 1
 
                 if h >= 3 and w >= 3:
                     room = Room(x, y, w, h)
@@ -329,56 +339,82 @@ class FloorPlanGenerator:
 
         corridor_width = self.rng.choice([2, 3])
 
-        # Choose template pattern - mix of realistic and varied layouts
-        pattern = self.rng.choice([
+        # Choose template pattern - prioritize realistic and challenging patterns
+        # Reduce easy L/U shapes, focus on complex realistic layouts
+        patterns = [
             'corridor_central',   # Classic office hallway
             'office_building',    # Realistic office with cubicles
             'school_layout',      # Classrooms along corridor
             'warehouse',          # Open space with aisles
             'hospital_wing',      # Patient rooms with nurse station
-            'l_shape',
-            'u_shape',
-            'open_office'
-        ])
+            'open_office'         # Open space with columns
+        ]
+        weights = [0.20, 0.25, 0.20, 0.15, 0.15, 0.05]  # Prioritize complex patterns
+
+        # Only 5% chance for easy L/U shapes (for variety)
+        if self.rng.random() < 0.05:
+            pattern = self.rng.choice(['l_shape', 'u_shape'])
+        else:
+            pattern = self.py_random.choices(patterns, weights=weights)[0]
 
         rooms = []
 
         if pattern == 'corridor_central':
-            # Central corridor with rooms on both sides
-            corridor_y = rows // 2 - corridor_width // 2
-            grid[corridor_y:corridor_y+corridor_width, 1:cols-1] = CellType.PASSABLE.value
+            # L-shaped or T-shaped corridor system with varied rooms
+            main_corridor_y = rows // 2 - corridor_width // 2
+            grid[main_corridor_y:main_corridor_y+corridor_width, 1:cols-1] = CellType.PASSABLE.value
 
-            # Rooms on top
-            room_count_top = self.rng.integers(2, 5)
-            room_width = (cols - 2) // room_count_top
+            # Add perpendicular cross-corridor for complexity
+            if self.rng.random() < 0.5:
+                cross_x = cols // 2 - corridor_width // 2
+                grid[1:rows-1, cross_x:cross_x+corridor_width] = CellType.PASSABLE.value
+
+            # Rooms on top with varying sizes
+            room_count_top = self.rng.integers(3, 6)
+            x_pos = 1
             for i in range(room_count_top):
-                x = 1 + i * room_width
-                y = 1
-                h = corridor_y - 2
-                w = room_width - 1
-                if h >= 3 and w >= 3:
-                    room = Room(x, y, w, h)
-                    rooms.append(room)
-                    grid[y:y+h, x:x+w] = CellType.PASSABLE.value
-                    # Door to corridor
-                    door_x = x + w // 2
-                    grid[y+h:corridor_y+1, door_x:door_x+1] = CellType.PASSABLE.value
+                # Vary room widths (some larger, some smaller)
+                w = self.rng.integers(max(5, (cols-2)//room_count_top - 3),
+                                     (cols-2)//room_count_top + 4)
+                if x_pos + w >= cols - 1:
+                    w = cols - x_pos - 2
 
-            # Rooms on bottom
-            room_count_bottom = self.rng.integers(2, 5)
-            room_width = (cols - 2) // room_count_bottom
-            for i in range(room_count_bottom):
-                x = 1 + i * room_width
-                y = corridor_y + corridor_width + 1
-                h = rows - y - 2
-                w = room_width - 1
-                if h >= 3 and w >= 3:
-                    room = Room(x, y, w, h)
+                y = 1
+                h = main_corridor_y - 2
+                if h >= 4 and w >= 4:
+                    room = Room(x_pos, y, w, h)
                     rooms.append(room)
-                    grid[y:y+h, x:x+w] = CellType.PASSABLE.value
+                    grid[y:y+h, x_pos:x_pos+w] = CellType.PASSABLE.value
+                    # Door to corridor (sometimes offset for challenge)
+                    door_x = x_pos + self.rng.integers(2, max(3, w - 2))
+                    grid[y+h:main_corridor_y+1, door_x] = CellType.PASSABLE.value
+
+                x_pos += w + 1
+                if x_pos >= cols - 5:
+                    break
+
+            # Rooms on bottom with varying sizes
+            room_count_bottom = self.rng.integers(3, 6)
+            x_pos = 1
+            for i in range(room_count_bottom):
+                w = self.rng.integers(max(5, (cols-2)//room_count_bottom - 3),
+                                     (cols-2)//room_count_bottom + 4)
+                if x_pos + w >= cols - 1:
+                    w = cols - x_pos - 2
+
+                y = main_corridor_y + corridor_width + 1
+                h = rows - y - 1
+                if h >= 4 and w >= 4:
+                    room = Room(x_pos, y, w, h)
+                    rooms.append(room)
+                    grid[y:y+h, x_pos:x_pos+w] = CellType.PASSABLE.value
                     # Door to corridor
-                    door_x = x + w // 2
-                    grid[corridor_y+corridor_width-1:y+1, door_x:door_x+1] = CellType.PASSABLE.value
+                    door_x = x_pos + self.rng.integers(2, max(3, w - 2))
+                    grid[main_corridor_y+corridor_width:y+1, door_x] = CellType.PASSABLE.value
+
+                x_pos += w + 1
+                if x_pos >= cols - 5:
+                    break
 
         elif pattern == 'l_shape':
             # L-shaped building
@@ -1141,7 +1177,7 @@ class FloorPlanGenerator:
         """Validate that floor plan is usable for simulation"""
         rows, cols = grid.shape
 
-        # Check minimum passable area (at least 20% of grid)
+        # Check minimum passable area (at least 15% of grid)
         passable = np.sum(grid == CellType.PASSABLE.value)
         if passable < 0.15 * rows * cols:
             return False
@@ -1150,14 +1186,50 @@ class FloorPlanGenerator:
         if passable < 20:  # Need at least 20 passable cells
             return False
 
-        # Check perimeter has walls
+        # Check perimeter has walls (but allow single-cell thickness)
         if not (np.all(grid[0, :] == CellType.WALL.value) and
                 np.all(grid[-1, :] == CellType.WALL.value) and
                 np.all(grid[:, 0] == CellType.WALL.value) and
                 np.all(grid[:, -1] == CellType.WALL.value)):
             return False
 
+        # CRITICAL: Verify connectivity - all passable cells must be reachable
+        if not self._verify_connectivity(grid):
+            return False
+
         return True
+
+    def _verify_connectivity(self, grid: np.ndarray) -> bool:
+        """
+        Verify that all passable cells are connected.
+        Returns True if the floor plan has a single connected component.
+        """
+        rows, cols = grid.shape
+
+        # Find all passable cells
+        passable_cells = np.argwhere(grid == CellType.PASSABLE.value)
+        if len(passable_cells) == 0:
+            return False
+
+        # BFS from first passable cell
+        start = tuple(passable_cells[0])
+        visited = set()
+        queue = deque([start])
+        visited.add(start)
+
+        while queue:
+            y, x = queue.popleft()
+
+            # Check 4-connected neighbors (agents can move in 8 directions, but we check 4-connectivity for paths)
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < rows and 0 <= nx < cols:
+                    if (ny, nx) not in visited and grid[ny, nx] == CellType.PASSABLE.value:
+                        visited.add((ny, nx))
+                        queue.append((ny, nx))
+
+        # All passable cells should be visited
+        return len(visited) == len(passable_cells)
 
     def add_exits_to_plan(
         self,

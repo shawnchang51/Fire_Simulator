@@ -55,22 +55,22 @@ class GenerationConfig:
     workers: int = 8
 
     # Floor plan parameters
-    size_range: Tuple[int, int] = (20, 80)
+    size_range: Tuple[int, int] = (50, 120)  # Larger buildings for meaningful door placement differences
 
     # Door configuration parameters
     num_doors_range: Tuple[int, int] = (2, 5)
     num_exits_range: Tuple[int, int] = (1, 3)
-    min_door_spacing: int = 3
+    min_door_spacing: int = 5  # More spacing to create challenging placements
 
     # Monte Carlo simulation parameters
-    occupant_density_range: Tuple[float, float] = (0.02, 0.10)  # 2% to 10% of passable cells
+    occupant_density_range: Tuple[float, float] = (0.05, 0.15)  # Higher density for congestion
     max_steps: int = 500
 
     # Fire parameter ranges (will be randomized per MC run)
-    num_fires_range: Tuple[int, int] = (2, 5)  # More fires for better differentiation
-    fire_spread_rate_range: Tuple[float, float] = (0.2, 0.6)  # Normal to aggressive
-    fire_intensity_growth_range: Tuple[float, float] = (0.3, 1.0)
-    fire_discovery_delay_range: Tuple[int, int] = (0, 20)  # Early to late detection
+    num_fires_range: Tuple[int, int] = (3, 7)  # More fires for challenge
+    fire_spread_rate_range: Tuple[float, float] = (0.3, 0.8)  # More aggressive fire
+    fire_intensity_growth_range: Tuple[float, float] = (0.5, 1.5)  # Faster intensity growth
+    fire_discovery_delay_range: Tuple[int, int] = (5, 30)  # Longer delays to allow fire to spread
 
     # Fixed parameters (same baseline for all comparisons)
     fire_damage_threshold: float = 10.0  # Fixed threshold for consistent baseline
@@ -394,6 +394,8 @@ class TrainingDataGeneratorV3:
         with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
             # Process one floor plan at a time to avoid memory leak
             for plan_id, (grid, metadata) in self.floor_plans.items():
+                plan_start_time = time.time()
+
                 # Generate door configurations for this floor plan
                 candidate_gen = CandidateGenerator(
                     floor_plan=grid,
@@ -416,8 +418,11 @@ class TrainingDataGeneratorV3:
                 ]
 
                 # Submit tasks for this floor plan
+                logger.info(f"  Floor plan {plan_id}: Submitting {len(tasks)} configs to {self.config.workers} workers")
                 futures = {executor.submit(evaluate_door_config_monte_carlo, task): task
                           for task in tasks}
+
+                plan_completed = 0
 
                 # Process results for this floor plan
                 for future in as_completed(futures):
@@ -480,8 +485,13 @@ class TrainingDataGeneratorV3:
                 del tasks
                 del grid_list
 
+                # Log completion for this floor plan
+                plan_elapsed = time.time() - plan_start_time
+                plan_rate = len(door_configs) / plan_elapsed if plan_elapsed > 0 else 0
+                logger.info(f"  Floor plan {plan_id} complete: {len(door_configs)} configs in {plan_elapsed:.1f}s ({plan_rate:.1f} configs/sec)")
+
                 if (plan_id + 1) % 10 == 0:
-                    logger.info(f"  Processed floor plan {plan_id + 1}/{len(self.floor_plans)}")
+                    logger.info(f"  Progress: {plan_id + 1}/{len(self.floor_plans)} floor plans processed")
 
         logger.info(f"  Evaluated {len(self.all_results)} door configurations")
         logger.info(f"  Results saved to {results_file}")

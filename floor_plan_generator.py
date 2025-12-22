@@ -215,8 +215,8 @@ class FloorPlanGenerator:
         # Connect rooms with corridors
         self._connect_rooms_mst(grid, rooms, corridor_width)
 
-        # Add some internal obstacles (furniture)
-        obstacle_density = self.rng.uniform(0.02, 0.08)
+        # Add more internal obstacles (furniture, walls) for challenging navigation
+        obstacle_density = self.rng.uniform(0.08, 0.20)
         self._add_obstacles(grid, obstacle_density)
 
         # Add perimeter wall
@@ -283,8 +283,8 @@ class FloorPlanGenerator:
         # Connect all rooms
         self._connect_rooms_mst(grid, rooms, corridor_width)
 
-        # Add obstacles
-        obstacle_density = self.rng.uniform(0.03, 0.10)
+        # Add more obstacles for challenging navigation
+        obstacle_density = self.rng.uniform(0.08, 0.20)
         self._add_obstacles(grid, obstacle_density)
 
         metadata = FloorPlanMetadata(
@@ -394,8 +394,8 @@ class FloorPlanGenerator:
                 col_size = self.rng.integers(1, 3)
                 grid[cy:cy+col_size, cx:cx+col_size] = CellType.WALL.value
 
-        # Add internal obstacles
-        obstacle_density = self.rng.uniform(0.05, 0.15)
+        # Add more internal obstacles for challenging navigation
+        obstacle_density = self.rng.uniform(0.10, 0.25)
         self._add_obstacles(grid, obstacle_density)
 
         metadata = FloorPlanMetadata(
@@ -419,8 +419,8 @@ class FloorPlanGenerator:
         """
         rows, cols = size
 
-        # Initialize with random noise
-        fill_prob = self.rng.uniform(0.40, 0.50)
+        # Initialize with random noise (higher fill = more walls = more challenging)
+        fill_prob = self.rng.uniform(0.45, 0.55)
         grid = (self.rng.random((rows, cols)) < fill_prob).astype(np.float32)
         grid = np.where(grid > 0, CellType.WALL.value, CellType.PASSABLE.value)
 

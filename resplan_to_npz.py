@@ -49,34 +49,57 @@ class ResPlanToNPZ:
         self._compute_dimensions()
 
     def _compute_dimensions(self):
-        """Compute grid dimensions from actual plan dimensions (no scaling)."""
+        """Compute grid dimensions from actual plan dimensions using net_area for scaling."""
         # Use 'inner' polygon to get the interior space bounds
         inner = self.plan.get('inner')
         if inner is None or inner.is_empty:
             raise ValueError("Plan has no 'inner' geometry to determine bounds")
 
-        # Get bounds in ResPlan coordinates
+        # Get bounds in ResPlan coordinate units (arbitrary units, not meters)
         x_min, y_min, x_max, y_max = inner.bounds
-        width = x_max - x_min
-        height = y_max - y_min
+        width_units = x_max - x_min
+        height_units = y_max - y_min
 
-        # Calculate grid size based on actual dimensions and cell size
-        self.grid_cols = int(np.ceil(width / self.cell_size))
-        self.grid_rows = int(np.ceil(height / self.cell_size))
+        # Get real-world area in square meters
+        net_area_m2 = self.plan.get('net_area', 0)
+        if net_area_m2 <= 0:
+            raise ValueError(f"Plan has invalid or missing net_area: {net_area_m2}")
 
-        # Store bounds for coordinate conversion
+        # Calculate conversion factor from ResPlan units to meters
+        # IMPORTANT: Use actual polygon area, not bounding box area
+        # (inner could be L-shaped, irregular, etc.)
+        resplan_area_units2 = inner.area  # Shapely polygon's actual area
+        scale_factor = np.sqrt(net_area_m2 / resplan_area_units2)
+
+        # Convert to meters
+        width_meters = width_units * scale_factor
+        height_meters = height_units * scale_factor
+
+        # Calculate grid size based on real dimensions and cell size
+        self.grid_cols = int(np.ceil(width_meters / self.cell_size))
+        self.grid_rows = int(np.ceil(height_meters / self.cell_size))
+
+        # Store bounds and scale for coordinate conversion
         self.x_min = x_min
         self.y_min = y_min
         self.x_max = x_max
         self.y_max = y_max
+        self.scale_factor = scale_factor  # ResPlan units → meters
 
-        print(f"Plan dimensions: {width:.2f} x {height:.2f} units")
+        print(f"Plan dimensions (ResPlan units): {width_units:.2f} x {height_units:.2f}")
+        print(f"Plan dimensions (meters): {width_meters:.2f} x {height_meters:.2f}")
+        print(f"Net area: {net_area_m2:.2f} sqm (scale factor: {scale_factor:.4f})")
         print(f"Grid size: {self.grid_rows} x {self.grid_cols} cells ({self.cell_size}m per cell)")
 
     def _world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
-        """Convert world coordinates to grid (col, row)."""
-        col = int((x - self.x_min) / self.cell_size)
-        row = int((y - self.y_min) / self.cell_size)
+        """Convert ResPlan coordinates to grid (col, row)."""
+        # First convert from ResPlan units to meters
+        x_meters = (x - self.x_min) * self.scale_factor
+        y_meters = (y - self.y_min) * self.scale_factor
+
+        # Then convert meters to grid cells
+        col = int(x_meters / self.cell_size)
+        row = int(y_meters / self.cell_size)
         return (col, row)
 
     def _create_base_grid(self) -> np.ndarray:
@@ -282,6 +305,7 @@ class ResPlanToNPZ:
             'cell_size': self.cell_size,
             'grid_rows': self.grid_rows,
             'grid_cols': self.grid_cols,
+            'scale_factor': self.scale_factor,  # ResPlan units → meters
             'world_bounds': {
                 'x_min': float(self.x_min),
                 'y_min': float(self.y_min),
@@ -356,6 +380,7 @@ def load_npz(npz_path: str) -> Dict[str, Any]:
             'cell_size': float(data['cell_size']),
             'grid_rows': int(data['grid_rows']),
             'grid_cols': int(data['grid_cols']),
+            'scale_factor': float(data['scale_factor']),
             'world_bounds': data['world_bounds'].item(),
             'num_doors': int(data['num_doors']),
             'num_exits': int(data['num_exits'])

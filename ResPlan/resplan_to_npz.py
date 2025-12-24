@@ -22,7 +22,7 @@ import cv2
 
 # Add ResPlan utilities
 sys.path.insert(0, str(Path(__file__).parent / "ResPlan"))
-from ResPlan.resplan_utils import normalize_keys, get_geometries, centroid
+from resplan_utils import normalize_keys, get_geometries, centroid
 
 from shapely.geometry import Polygon, Point, box
 from shapely import affinity

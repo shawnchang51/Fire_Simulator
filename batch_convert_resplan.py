@@ -21,7 +21,7 @@ import sys
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from resplan_to_npz import load_resplan_dataset, ResPlanToNPZ
+from ResPlan.resplan_to_npz import load_resplan_dataset, ResPlanToNPZ
 
 
 def batch_convert(plan_indices, output_dir: Path, cell_size: float = 0.3,

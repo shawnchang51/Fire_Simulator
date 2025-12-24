@@ -31,19 +31,18 @@ from shapely import affinity
 class ResPlanToNPZ:
     """Convert ResPlan vector floor plans to NPZ grid format without scaling."""
 
-    def __init__(self, plan: Dict[str, Any], cell_size: float = 0.3,
-                 wall_thickness: int = 2, door_opening_size: int = 1):
+    def __init__(self, plan: Dict[str, Any], cell_size: float = 0.3):
         """
         Args:
             plan: ResPlan floor plan dictionary
             cell_size: Physical size of each grid cell in meters (default: 0.3m)
-            wall_thickness: Thickness of walls in grid cells (default: 2)
-            door_opening_size: Number of passable cells per door (default: 1)
+
+        Note: Walls are always 1 cell wide. Doors remain as walls in the grid
+        (door positions are saved in metadata for post-processing).
         """
         self.plan = normalize_keys(plan)
         self.cell_size = cell_size
-        self.wall_thickness = wall_thickness
-        self.door_opening_size = door_opening_size
+        self.wall_thickness = 1  # Always 1 cell wide
 
         # Compute grid dimensions from actual plan size
         self._compute_dimensions()
@@ -198,36 +197,45 @@ class ResPlanToNPZ:
                         cv2.polylines(grid, [grid_coords], isClosed=False,
                                     color=-2, thickness=self.wall_thickness)
 
+        # Draw doors as walls (-2) - they'll be opened in post-processing
+        door_geoms = get_geometries(self.plan.get('door'))
+        for door_geom in door_geoms:
+            from shapely.geometry import LineString
+            if isinstance(door_geom, LineString):
+                coords = np.array(door_geom.coords)
+                grid_coords = np.zeros((len(coords), 2), dtype=np.int32)
+                for i, (x, y) in enumerate(coords):
+                    col, row = self._world_to_grid(x, y)
+                    grid_coords[i] = [col, row]
+                cv2.polylines(grid, [grid_coords], isClosed=False,
+                            color=-2, thickness=self.wall_thickness)
+            elif isinstance(door_geom, Polygon):
+                self._rasterize_polygon(door_geom, -2, grid)
+
+        # Draw front doors (exits) as walls (-2) - they'll be opened in post-processing
+        front_door_geoms = get_geometries(self.plan.get('front_door'))
+        for fd_geom in front_door_geoms:
+            from shapely.geometry import LineString
+            if isinstance(fd_geom, LineString):
+                coords = np.array(fd_geom.coords)
+                grid_coords = np.zeros((len(coords), 2), dtype=np.int32)
+                for i, (x, y) in enumerate(coords):
+                    col, row = self._world_to_grid(x, y)
+                    grid_coords[i] = [col, row]
+                cv2.polylines(grid, [grid_coords], isClosed=False,
+                            color=-2, thickness=self.wall_thickness)
+            elif isinstance(fd_geom, Polygon):
+                self._rasterize_polygon(fd_geom, -2, grid)
+
         return grid
 
-    def _find_door_opening(self, door_geom, grid: np.ndarray) -> Optional[Tuple[int, int]]:
+    def extract_doors(self) -> List[Tuple[int, int]]:
         """
-        Find the best single cell to make passable for a door.
+        Extract door positions (for post-processing).
 
-        Strategy: Use the centroid of the door geometry.
+        Doors remain as walls (-2) in the grid.
 
         Returns:
-            (row, col) of the door opening cell, or None if invalid
-        """
-        c = centroid(door_geom) if hasattr(door_geom, 'centroid') else door_geom.centroid
-        col, row = self._world_to_grid(c.x, c.y)
-
-        # Validate
-        if 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
-            return (row, col)
-        return None
-
-    def extract_doors(self, grid: np.ndarray) -> Tuple[List[Tuple[int, int]], np.ndarray]:
-        """
-        Extract door positions and create openings in the grid.
-
-        For each door:
-        - Find centroid position
-        - Make that single cell passable (0)
-        - Rest of door remains as wall (-2)
-
-        Returns:
-            (door_positions, modified_grid)
             door_positions: List of (row, col) tuples
         """
         door_positions = []
@@ -238,21 +246,23 @@ class ResPlanToNPZ:
             if door_geom.is_empty:
                 continue
 
-            opening = self._find_door_opening(door_geom, grid)
-            if opening is not None:
-                row, col = opening
-                # Make this cell passable
-                grid[row, col] = 0
+            # Just record position, don't modify grid
+            c = centroid(door_geom) if hasattr(door_geom, 'centroid') else door_geom.centroid
+            col, row = self._world_to_grid(c.x, c.y)
+
+            # Validate
+            if 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
                 door_positions.append((row, col))
 
-        return door_positions, grid
+        return door_positions
 
-    def extract_exits(self, grid: np.ndarray) -> Tuple[List[Tuple[int, int]], np.ndarray]:
+    def extract_exits(self) -> List[Tuple[int, int]]:
         """
-        Extract exit positions (front doors) and create openings.
+        Extract exit positions (front doors) for post-processing.
+
+        Exits remain as walls (-2) in the grid.
 
         Returns:
-            (exit_positions, modified_grid)
             exit_positions: List of (row, col) tuples
         """
         exit_positions = []
@@ -263,14 +273,15 @@ class ResPlanToNPZ:
             if fd_geom.is_empty:
                 continue
 
-            opening = self._find_door_opening(fd_geom, grid)
-            if opening is not None:
-                row, col = opening
-                # Make this cell passable
-                grid[row, col] = 0
+            # Just record position, don't modify grid
+            c = centroid(fd_geom) if hasattr(fd_geom, 'centroid') else fd_geom.centroid
+            col, row = self._world_to_grid(c.x, c.y)
+
+            # Validate
+            if 0 <= row < self.grid_rows and 0 <= col < self.grid_cols:
                 exit_positions.append((row, col))
 
-        return exit_positions, grid
+        return exit_positions
 
     def convert(self) -> Dict[str, Any]:
         """
@@ -278,23 +289,23 @@ class ResPlanToNPZ:
 
         Returns:
             Dictionary with:
-                - grid: 2D array
+                - grid: 2D array (doors/exits remain as walls -2)
                 - door_positions: Nx2 array
                 - exit_positions: Mx2 array
                 - metadata: dict
         """
-        # Create base grid
+        # Create base grid (doors/exits are walls)
         print("Creating base grid...")
         grid = self.create_grid()
 
-        # Extract and punch through doors
-        print("Extracting doors...")
-        door_positions, grid = self.extract_doors(grid)
+        # Extract door positions (don't modify grid)
+        print("Extracting door positions...")
+        door_positions = self.extract_doors()
         print(f"Found {len(door_positions)} doors")
 
-        # Extract and punch through exits
-        print("Extracting exits...")
-        exit_positions, grid = self.extract_exits(grid)
+        # Extract exit positions (don't modify grid)
+        print("Extracting exit positions...")
+        exit_positions = self.extract_exits()
         print(f"Found {len(exit_positions)} exits")
 
         # Prepare metadata
@@ -398,8 +409,6 @@ def main():
                        help='Select random plan')
     parser.add_argument('--cell-size', type=float, default=0.3,
                        help='Cell size in meters (default: 0.3)')
-    parser.add_argument('--wall-thickness', type=int, default=2,
-                       help='Wall thickness in cells (default: 2)')
     parser.add_argument('--output', type=str, required=True,
                        help='Output NPZ file path')
     parser.add_argument('--pkl-path', type=str, default='ResPlan/ResPlan.pkl',
@@ -434,8 +443,7 @@ def main():
     try:
         converter = ResPlanToNPZ(
             plan,
-            cell_size=args.cell_size,
-            wall_thickness=args.wall_thickness
+            cell_size=args.cell_size
         )
 
         output_path = Path(args.output)

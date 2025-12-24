@@ -25,7 +25,7 @@ from resplan_to_npz import load_resplan_dataset, ResPlanToNPZ
 
 
 def batch_convert(plan_indices, output_dir: Path, cell_size: float = 0.3,
-                 wall_thickness: int = 2, pkl_path: str = 'ResPlan/ResPlan.pkl'):
+                 pkl_path: str = 'ResPlan/ResPlan.pkl'):
     """
     Batch convert multiple plans to NPZ.
 
@@ -33,7 +33,6 @@ def batch_convert(plan_indices, output_dir: Path, cell_size: float = 0.3,
         plan_indices: List of plan indices to convert
         output_dir: Directory to save NPZ files
         cell_size: Cell size in meters
-        wall_thickness: Wall thickness in cells
         pkl_path: Path to ResPlan.pkl
     """
     # Load dataset
@@ -63,8 +62,7 @@ def batch_convert(plan_indices, output_dir: Path, cell_size: float = 0.3,
         try:
             converter = ResPlanToNPZ(
                 plan,
-                cell_size=cell_size,
-                wall_thickness=wall_thickness
+                cell_size=cell_size
             )
             converter.save_npz(str(output_path))
             successful += 1
@@ -108,8 +106,6 @@ def main():
                        help='Output directory for NPZ files')
     parser.add_argument('--cell-size', type=float, default=0.3,
                        help='Cell size in meters (default: 0.3)')
-    parser.add_argument('--wall-thickness', type=int, default=2,
-                       help='Wall thickness in cells (default: 2)')
     parser.add_argument('--pkl-path', type=str, default='ResPlan/ResPlan.pkl',
                        help='Path to ResPlan.pkl (default: ResPlan/ResPlan.pkl)')
 
@@ -141,7 +137,6 @@ def main():
         plan_indices,
         output_dir,
         cell_size=args.cell_size,
-        wall_thickness=args.wall_thickness,
         pkl_path=args.pkl_path
     )
 

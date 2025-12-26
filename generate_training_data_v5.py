@@ -1048,7 +1048,9 @@ class TrainingDataGeneratorV5:
                         try:
                             result = future.result()
 
-                            if 'error' not in result:
+                            if 'error' in result:
+                                logger.warning(f"Evaluation error: {result.get('error')}")
+                            else:
                                 # Convert to HierarchicalSimulationResult with scenario_hash
                                 sim_result = HierarchicalSimulationResult(
                                     floor_plan_id=result['floor_plan_id'],

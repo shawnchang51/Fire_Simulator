@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
 import cv2
+from scipy import ndimage
+from skimage.morphology import thin, closing, opening, dilation, erosion
+from skimage.segmentation import find_boundaries
 
 # Add ResPlan utilities
 sys.path.insert(0, str(Path(__file__).parent / "ResPlan"))
@@ -150,6 +153,180 @@ class ResPlanToNPZ:
 
         return grid
 
+    def _clean_walls(self, grid: np.ndarray) -> np.ndarray:
+        """
+        Clean up walls to ensure they are exactly 1 cell wide while maintaining connectivity.
+
+        Strategy:
+        1. Extract boundary layer between interior and walls (guaranteed 1 cell wide)
+        2. Add cells to ensure no diagonal-only gaps for 8-connected agents
+        3. Keep exterior as solid -2
+
+        Args:
+            grid: Input grid with walls
+
+        Returns:
+            Cleaned grid with 1-cell wide walls that properly block movement
+        """
+        from scipy import ndimage
+        from skimage.segmentation import find_boundaries
+
+        rows, cols = grid.shape
+
+        # Create masks
+        interior_mask = (grid == 0).astype(bool)
+        wall_mask = (grid == -2).astype(bool)
+
+        # Find the boundary of the interior region
+        # This gives us a continuous boundary that blocks 8-connected movement
+        boundary = find_boundaries(interior_mask, mode='outer')
+
+        # The boundary should be walls
+        wall_boundary = boundary & wall_mask
+
+        print(f"Extracting boundary: {np.sum(wall_boundary)} cells")
+
+        # Ensure no diagonal gaps exist in the boundary
+        print("Ensuring 4-connectivity...")
+        fixed_boundary = self._ensure_4connected_barrier(wall_boundary, interior_mask)
+        print(f"After ensuring connectivity: {np.sum(fixed_boundary)} cells")
+
+        # Reconstruct grid using flood fill
+        # Start with everything as passable
+        cleaned_grid = np.zeros_like(grid, dtype=np.float32)
+
+        # Mark thinned boundary as walls
+        cleaned_grid[fixed_boundary] = -2
+
+        # Use flood fill to identify interior vs exterior
+        # Interior regions contain original interior cells
+        # Exterior regions do not
+        non_wall_mask = ~fixed_boundary
+        labeled, num_features = ndimage.label(non_wall_mask)
+
+        # Mark regions
+        for label_id in range(1, num_features + 1):
+            region_mask = (labeled == label_id)
+            if np.any(interior_mask & region_mask):
+                # This region contains interior - mark as passable
+                cleaned_grid[region_mask] = 0
+            else:
+                # This region is exterior - mark as impassable
+                cleaned_grid[region_mask] = -2
+
+        # Restore any other values (e.g., fire)
+        other_mask = (grid != -2) & (grid != 0)
+        cleaned_grid[other_mask] = grid[other_mask]
+
+        return cleaned_grid
+
+    def _ensure_4connected_barrier(self, wall_boundary: np.ndarray, interior_mask: np.ndarray) -> np.ndarray:
+        """
+        Ensure wall boundary has no diagonal gaps that would allow 8-connected agents through.
+
+        Args:
+            wall_boundary: Boolean array of boundary wall cells
+            interior_mask: Boolean array of interior cells
+
+        Returns:
+            Fixed boundary with no diagonal gaps
+        """
+        from scipy import ndimage
+
+        rows, cols = wall_boundary.shape
+        fixed = wall_boundary.copy()
+
+        # Multiple passes to catch all diagonal gap patterns
+        max_iterations = 10
+        for iteration in range(max_iterations):
+            added = 0
+
+            for r in range(1, rows - 1):
+                for c in range(1, cols - 1):
+                    # Skip if already a wall or if it's interior
+                    if fixed[r, c] or interior_mask[r, c]:
+                        continue
+
+                    # Check if this cell would create a diagonal passage
+                    # An agent can slip through if there are diagonal walls but no 4-connected barrier
+
+                    # Pattern 1: NW-SE diagonal
+                    if (fixed[r-1, c-1] and fixed[r+1, c+1]):
+                        # Check if there's a 4-connected path
+                        if not fixed[r-1, c] and not fixed[r, c-1]:
+                            fixed[r, c] = True
+                            added += 1
+                            continue
+
+                    # Pattern 2: NE-SW diagonal
+                    if (fixed[r-1, c+1] and fixed[r+1, c-1]):
+                        if not fixed[r-1, c] and not fixed[r, c+1]:
+                            fixed[r, c] = True
+                            added += 1
+                            continue
+
+            if added == 0:
+                break
+
+        return fixed
+
+    def _fix_diagonal_walls(self, wall_mask: np.ndarray) -> np.ndarray:
+        """
+        Fix diagonal gaps in walls to prevent 8-connected agents from passing through.
+
+        Detects patterns where agents could slip through diagonally and fills the gaps.
+
+        Args:
+            wall_mask: Boolean array of wall cells
+
+        Returns:
+            Fixed wall mask that properly blocks 8-connected movement
+        """
+        rows, cols = wall_mask.shape
+        fixed_walls = wall_mask.copy()
+
+        # Pass 1: Fix diagonal-only connected wall cells
+        for r in range(1, rows - 1):
+            for c in range(1, cols - 1):
+                if wall_mask[r, c]:
+                    # Check 4-connected neighbors
+                    has_4conn = (wall_mask[r-1, c] or wall_mask[r+1, c] or
+                                wall_mask[r, c-1] or wall_mask[r, c+1])
+
+                    if not has_4conn:
+                        # Only diagonal connections - add a 4-connected neighbor
+                        nw = wall_mask[r-1, c-1]
+                        ne = wall_mask[r-1, c+1]
+                        sw = wall_mask[r+1, c-1]
+                        se = wall_mask[r+1, c+1]
+
+                        if nw or ne:
+                            fixed_walls[r-1, c] = True
+                        elif sw or se:
+                            fixed_walls[r+1, c] = True
+
+        # Pass 2: Fill diagonal gaps where agents could slip through
+        # Pattern:  . # .    or    # . #
+        #           # . #          . # .
+        #           . # .          # . #
+        for r in range(1, rows - 1):
+            for c in range(1, cols - 1):
+                # Check for NW-SE diagonal gap
+                if (not fixed_walls[r, c] and
+                    fixed_walls[r-1, c-1] and fixed_walls[r+1, c+1] and
+                    not fixed_walls[r-1, c] and not fixed_walls[r, c-1]):
+                    # Gap allows diagonal movement - fill it
+                    fixed_walls[r, c] = True
+
+                # Check for NE-SW diagonal gap
+                elif (not fixed_walls[r, c] and
+                      fixed_walls[r-1, c+1] and fixed_walls[r+1, c-1] and
+                      not fixed_walls[r-1, c] and not fixed_walls[r, c+1]):
+                    # Gap allows diagonal movement - fill it
+                    fixed_walls[r, c] = True
+
+        return fixed_walls
+
     def create_grid(self) -> np.ndarray:
         """
         Create the complete floor plan grid.
@@ -159,6 +336,7 @@ class ResPlanToNPZ:
         2. Fill 'inner' polygon with 0 (passable interior)
         3. Draw walls as -2 on top
         4. Doors will be handled separately
+        5. Clean walls to ensure straight lines and 1-cell width
 
         Returns:
             2D numpy array with -2=walls/outside, 0=interior
@@ -226,6 +404,10 @@ class ResPlanToNPZ:
                             color=-2, thickness=self.wall_thickness)
             elif isinstance(fd_geom, Polygon):
                 self._rasterize_polygon(fd_geom, -2, grid)
+
+        # Clean walls to ensure straight lines and 1-cell width
+        print("Cleaning walls to ensure straight lines and 1-cell width...")
+        grid = self._clean_walls(grid)
 
         return grid
 

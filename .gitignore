@@ -13,6 +13,8 @@ monte_carlo_results/
 test_*/
 sample_floor_plans/
 *pkl
+*.npz
+*.png
 
 # Virtual environments
 venv/

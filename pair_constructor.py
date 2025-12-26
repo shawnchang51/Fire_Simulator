@@ -63,11 +63,12 @@ class SimulationResult:
         # Primary: survival rate (weight = 1.0)
         # Secondary: efficiency - fewer steps is better (weight = 1.0, INCREASED from 0.5)
         # Tertiary: low fire damage (weight = 0.5, INCREASED from 0.2)
-        return (
-            self.survival_rate * 1.0 -
-            (self.steps / 1000) * 1.0 -
-            self.avg_fire_damage * 0.5
-        )
+        # return (
+        #     self.survival_rate * 1.0 -
+        #     (self.steps / 70) * 0.5 -
+        #     self.avg_fire_damage * 0.3
+        # )
+        return (0.7*self.survival_rate - 0.15*((self.steps-11)/(70-11)) - 0.15*((self.avg_fire_damage-0.0167)/(3.0111-0.0167)) + 0.118) / 0.818
 
     @property
     def effective_score(self) -> float:

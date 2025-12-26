@@ -345,6 +345,11 @@ class PairConstructor:
         if n < 2:
             return pairs
 
+        # Calculate quartile boundaries, ensuring valid ranges
+        # For small n, fall back to first/last elements
+        bottom_end = max(1, n // 4)  # At least 1 element in bottom range
+        top_start = min(n - 1, 3 * n // 4)  # At least 1 element in top range
+
         attempts = 0
         max_attempts = num_pairs * 5
 
@@ -352,8 +357,8 @@ class PairConstructor:
             attempts += 1
 
             # Pick from top and bottom quarters
-            top_idx = self.rng.integers(3 * n // 4, n)
-            bottom_idx = self.rng.integers(0, n // 4)
+            top_idx = self.rng.integers(top_start, n)
+            bottom_idx = self.rng.integers(0, bottom_end)
 
             result_a = sorted_results[top_idx]
             result_b = sorted_results[bottom_idx]

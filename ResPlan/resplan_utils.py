@@ -157,17 +157,93 @@ def shrink_short_side(polygon: Polygon, scale: float) -> Polygon:
     
     return result
 
-def get_structural_plan(plan: Dict[str, Any], scale: float = 1.0) -> Dict[str, Any]:
+def calculate_door_positions_in_grid(plan: Dict[str, Any], cell_size_m: float = 0.3) -> Dict[str, List[Tuple[float, float]]]:
+    """
+    Calculate the center positions of doors and front_door projected onto grid coordinates.
+
+    Uses the same coordinate transformation as calculate_grid_size_for_plan to convert
+    world coordinates to grid coordinates.
+
+    Args:
+        plan: The plan dictionary containing door geometries and 'inner' polygon.
+        cell_size_m: Cell size in meters (default 0.3m) - same as used in grid calculation.
+
+    Returns:
+        A dictionary with keys 'door' and 'front_door', each containing a list of
+        (grid_x, grid_y) tuples representing the center position of each door in grid coordinates.
+        Returns empty lists if geometries are not present.
+    """
+    inner = plan.get('inner')
+    if inner is None or inner.is_empty:
+        return {'door': [], 'front_door': []}
+
+    inner_area_shapely = inner.area
+    floor_plan_area = plan.get('area')
+
+    if not floor_plan_area or inner_area_shapely <= 0:
+        return {'door': [], 'front_door': []}
+
+    # Calculate scale factor (same as in calculate_grid_size_for_plan)
+    scale_factor_area = floor_plan_area / inner_area_shapely
+    scale_factor_linear = np.sqrt(scale_factor_area)
+
+    x_min, y_min, x_max, y_max = inner.bounds
+    width_pixels = x_max - x_min
+    height_pixels = y_max - y_min
+
+    # Scale factors: world units -> grid units
+    grid_width = int(np.ceil(width_pixels * scale_factor_linear / cell_size_m))
+    grid_height = int(np.ceil(height_pixels * scale_factor_linear / cell_size_m))
+    grid_width = max(8, grid_width)
+    grid_height = max(8, grid_height)
+
+    scale_x = grid_width / width_pixels
+    scale_y = grid_height / height_pixels
+
+    result = {'door': [], 'front_door': []}
+
+    # Process doors (MultiPolygon)
+    doors = plan.get('door')
+    if doors is not None and not doors.is_empty:
+        for poly in doors.geoms:
+            if isinstance(poly, Polygon) and not poly.is_empty:
+                centroid = poly.centroid
+                # Transform to grid coordinates
+                grid_x = (centroid.x - x_min) * scale_x
+                grid_y = (centroid.y - y_min) * scale_y
+                result['door'].append((grid_x, grid_y))
+
+    # Process front_door (Polygon)
+    front_door = plan.get('front_door')
+    if front_door is not None and not front_door.is_empty:
+        if isinstance(front_door, Polygon):
+            centroid = front_door.centroid
+            # Transform to grid coordinates
+            grid_x = (centroid.x - x_min) * scale_x
+            grid_y = (centroid.y - y_min) * scale_y
+            result['front_door'].append((grid_x, grid_y))
+
+    return result
+
+
+def get_structural_plan(plan: Dict[str, Any], scale: float = 1.0,
+                       record_door_positions: bool = False,
+                       cell_size_m: float = 0.3) -> Dict[str, Any]:
     """
     Generate a modified plan containing only structural elements:
     walls, doors, windows, and front_door.
 
     Args:
         plan: The original plan dictionary containing geometry data.
+        scale: Scale factor to apply to structural elements via shrink_short_side.
+        record_door_positions: If True, calculate and include door center positions in grid coordinates.
+        cell_size_m: Cell size in meters for grid coordinate calculation (default 0.3m).
 
     Returns:
         A new dictionary with only 'wall', 'door', 'window', and 'front_door' keys
         (if they exist in the original plan), plus 'inner' and 'wall_width' if present.
+        If record_door_positions is True, also includes 'door_positions' key with
+        grid coordinates of door centers.
     """
     structural_keys_multipolygon = ["wall", "door", "window"]
     structural_keys_polygon = ["front_door"]
@@ -183,7 +259,7 @@ def get_structural_plan(plan: Dict[str, Any], scale: float = 1.0) -> Dict[str, A
                 modified_poly = shrink_short_side(poly, scale)
                 mod_mp.append(modified_poly)
             modified_plan[key] = MultiPolygon(mod_mp)
-                
+
     for key in structural_keys_polygon:
         if key in plan and plan[key] is not None:
             modified_plan[key] = shrink_short_side(plan[key], scale)
@@ -192,6 +268,11 @@ def get_structural_plan(plan: Dict[str, Any], scale: float = 1.0) -> Dict[str, A
     for key in metadata_keys:
         if key in plan and plan[key] is not None:
             modified_plan[key] = plan[key]
+
+    # Calculate and record door positions if requested
+    if record_door_positions:
+        door_positions = calculate_door_positions_in_grid(plan, cell_size_m)
+        modified_plan['door_positions'] = door_positions
 
     return modified_plan
 

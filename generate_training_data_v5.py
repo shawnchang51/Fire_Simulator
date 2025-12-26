@@ -19,6 +19,7 @@ import time
 import argparse
 import logging
 import traceback
+import hashlib
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict, field
 from typing import List, Dict, Tuple, Optional, Any
@@ -26,6 +27,104 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 
 import numpy as np
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+def generate_scenario(
+    passable_positions: List[Tuple[int, int]],
+    mc_params: Dict[str, Any],
+    seed: int
+) -> Dict[str, Any]:
+    """
+    Generate a single scenario (fire/agent positions and parameters).
+
+    This scenario can be reused across multiple door configurations to ensure
+    fair comparisons - all configs are evaluated under identical conditions.
+    """
+    rng = np.random.default_rng(seed)
+
+    # Occupant density and agent count
+    occupant_density = rng.uniform(
+        mc_params['occupant_density_range'][0],
+        mc_params['occupant_density_range'][1]
+    )
+    agent_count = int(len(passable_positions) * occupant_density)
+    agent_count = max(5, min(agent_count, len(passable_positions)))
+
+    # Random agent positions
+    agent_indices = rng.choice(len(passable_positions), size=agent_count, replace=False)
+    agent_positions = [passable_positions[i] for i in agent_indices]
+
+    # Fire count
+    num_fires = rng.integers(
+        mc_params['num_fires_range'][0],
+        mc_params['num_fires_range'][1] + 1
+    )
+
+    # Fire positions (avoid agents)
+    available_for_fire = [pos for pos in passable_positions if pos not in agent_positions]
+    if len(available_for_fire) < num_fires:
+        num_fires = max(1, len(available_for_fire))
+
+    fire_indices = rng.choice(len(available_for_fire), size=num_fires, replace=False)
+    fire_positions = [available_for_fire[i] for i in fire_indices]
+
+    # Fire parameters
+    fire_spread_rate = rng.uniform(
+        mc_params['fire_spread_rate_range'][0],
+        mc_params['fire_spread_rate_range'][1]
+    )
+    fire_intensity_growth = rng.uniform(
+        mc_params['fire_intensity_growth_range'][0],
+        mc_params['fire_intensity_growth_range'][1]
+    )
+    fire_discovery_delay = rng.integers(
+        mc_params['fire_discovery_delay_range'][0],
+        mc_params['fire_discovery_delay_range'][1] + 1
+    )
+
+    # Convert all numpy types to native Python types for JSON serialization
+    return {
+        'agent_positions': [tuple(pos) for pos in agent_positions],
+        'fire_positions': [tuple(pos) for pos in fire_positions],
+        'fire_spread_rate': float(fire_spread_rate),
+        'fire_intensity_growth': float(fire_intensity_growth),
+        'fire_discovery_delay': int(fire_discovery_delay),
+        'fire_damage_threshold': float(mc_params['fire_damage_threshold']),
+        'occupant_density': float(occupant_density),
+        'agent_count': int(agent_count),
+        'num_fires': int(num_fires),
+        'seed': int(seed)
+    }
+
+
+def compute_scenario_hash(scenario: Dict[str, Any]) -> str:
+    """
+    Compute a deterministic hash for a scenario.
+
+    Used to match pairs that were evaluated under identical conditions.
+    """
+    # Create canonical representation
+    canonical = json.dumps({
+        'agent_positions': sorted(scenario['agent_positions']),
+        'fire_positions': sorted(scenario['fire_positions']),
+        'fire_spread_rate': round(scenario['fire_spread_rate'], 4),
+        'fire_intensity_growth': round(scenario['fire_intensity_growth'], 4),
+        'fire_discovery_delay': scenario['fire_discovery_delay'],
+    }, sort_keys=True)
+
+    return hashlib.md5(canonical.encode()).hexdigest()[:12]
 
 # Local imports
 from resplan_loader import (
@@ -64,9 +163,11 @@ class GenerationConfigV5:
     monte_carlo_runs_per_config: int = 10   # Monte Carlo runs per door config
 
     # Pairing strategy (must sum to 1.0)
-    same_exit_ratio: float = 0.70   # Same plan, same exits, different doors
-    cross_exit_ratio: float = 0.20  # Same plan, different exits
-    cross_plan_ratio: float = 0.10  # Different plans
+    # Cross-plan pairs are disabled by default to prevent distribution bias:
+    # comparing scores across plans conflates plan difficulty with door quality
+    same_exit_ratio: float = 0.75   # Same plan, same exits, different doors
+    cross_exit_ratio: float = 0.25  # Same plan, different exits
+    cross_plan_ratio: float = 0.0   # Different plans (disabled - causes bias)
     pairs_per_plan: int = 300       # Total pairs per floor plan
 
     # Workers
@@ -104,17 +205,121 @@ class HierarchicalSimulationResult(SimulationResult):
     """Extended SimulationResult with exit_config_id for hierarchical pairing"""
     exit_config_id: int = 0
 
-    def __post_init__(self):
-        # If created from base SimulationResult, exit_config_id defaults to 0
-        if not hasattr(self, 'exit_config_id'):
-            self.exit_config_id = 0
+    # Note: scenario_hash is inherited from SimulationResult base class
+
+
+def evaluate_door_config_with_scenario(args: Tuple) -> Dict[str, Any]:
+    """
+    Evaluate a single door configuration with a PRE-DEFINED scenario.
+
+    This ensures that multiple door configurations are evaluated under identical
+    conditions (same fire/agent positions), enabling valid pairwise comparisons.
+
+    Args:
+        args: (floor_plan_id, exit_config_id, config_id, base_grid_data, door_config, scenario, max_steps)
+
+    Returns:
+        Dict with door config, scenario_hash, and simulation metrics
+    """
+    floor_plan_id, exit_config_id, config_id, base_grid_data, door_config, scenario, max_steps = args
+
+    base_grid = np.array(base_grid_data, dtype=np.float32)
+    scenario_hash = compute_scenario_hash(scenario)
+
+    try:
+        from fast_simulation import FastEvacuationSim
+
+        # Apply door configuration to base grid (open the doors)
+        grid = apply_door_config(base_grid, door_config)
+
+        # Extract exit positions from door config
+        exit_positions = []
+        for door in door_config:
+            if door.get('type') == 'exit':
+                pos_str = door.get('position', '')
+                if 'x' in pos_str and 'y' in pos_str:
+                    parts = pos_str.split('y')
+                    x = int(parts[0][1:])
+                    y = int(parts[1])
+                    exit_positions.append((x, y))
+
+        if not exit_positions:
+            return {
+                'floor_plan_id': floor_plan_id,
+                'exit_config_id': exit_config_id,
+                'config_id': config_id,
+                'scenario_hash': scenario_hash,
+                'error': 'No exits found in door config'
+            }
+
+        # Use the pre-defined scenario
+        agent_positions = scenario['agent_positions']
+        fire_positions = scenario['fire_positions']
+
+        try:
+            sim = FastEvacuationSim(
+                grid=grid.copy(),
+                agent_starts=agent_positions,
+                exits=exit_positions,
+                fire_starts=fire_positions,
+                deterministic_fire=False,
+                fire_update_interval=2,
+                fire_discovery_delay=scenario['fire_discovery_delay'],
+                fire_spread_mode='always_real',
+                fire_spread_rate=scenario['fire_spread_rate'],
+                fire_intensity_growth=scenario['fire_intensity_growth'],
+                fire_damage_threshold=scenario['fire_damage_threshold']
+            )
+
+            result = sim.run(max_steps=max_steps)
+
+            return {
+                'floor_plan_id': floor_plan_id,
+                'exit_config_id': exit_config_id,
+                'config_id': config_id,
+                'door_config': door_config,
+                'scenario_hash': scenario_hash,
+                'scenario': {
+                    'agent_count': scenario['agent_count'],
+                    'num_fires': scenario['num_fires'],
+                    'fire_spread_rate': scenario['fire_spread_rate'],
+                    'fire_discovery_delay': scenario['fire_discovery_delay']
+                },
+                'survival_rate': float(result.survival_rate),
+                'avg_steps': float(result.steps),
+                'avg_fire_damage': float(result.avg_fire_damage),
+                'evacuated': int(result.evacuated),
+                'dead': int(result.dead),
+                'survived': int(result.evacuated),
+                'num_runs': 1,
+                'success_runs': 1
+            }
+
+        except Exception as e:
+            return {
+                'floor_plan_id': floor_plan_id,
+                'exit_config_id': exit_config_id,
+                'config_id': config_id,
+                'scenario_hash': scenario_hash,
+                'error': f'Simulation failed: {e}'
+            }
+
+    except Exception as e:
+        return {
+            'floor_plan_id': floor_plan_id,
+            'exit_config_id': exit_config_id,
+            'config_id': config_id,
+            'scenario_hash': scenario_hash,
+            'error': str(e)
+        }
 
 
 def evaluate_door_config_monte_carlo_v5(args: Tuple) -> Dict[str, Any]:
     """
-    Evaluate a single door configuration with randomized monte carlo runs.
+    DEPRECATED: Use evaluate_door_config_with_scenario for scenario-consistent evaluation.
 
-    V5 version: includes exit_config_id for hierarchical pairing.
+    Evaluate a single door configuration with randomized monte carlo runs.
+    This function generates random scenarios internally, which prevents scenario matching.
 
     Args:
         args: (floor_plan_id, exit_config_id, config_id, base_grid_data, door_config, mc_params)
@@ -269,6 +474,7 @@ def evaluate_door_config_monte_carlo_v5(args: Tuple) -> Dict[str, Any]:
             'exit_config_id': exit_config_id,
             'config_id': config_id,
             'door_config': door_config,
+            'scenario_hash': '',  # No scenario hash - randomized per trial
             'survival_rate': float(np.median([r['survival_rate'] for r in trial_results])),
             'avg_steps': float(np.median([r['steps'] for r in trial_results])),
             'avg_fire_damage': float(np.median([r['avg_fire_damage'] for r in trial_results])),
@@ -745,26 +951,30 @@ class TrainingDataGeneratorV5:
     def _evaluate_hierarchical_configs(self):
         """
         Evaluate hierarchical configurations: Plan → Exit → Doors
+
+        Uses shared scenarios: all door configs within an (exit_config, scenario) group
+        are evaluated under identical fire/agent conditions for valid pairwise comparison.
         """
-        total_configs = (len(self.floor_plans) *
-                        self.config.exit_configs_per_plan *
-                        self.config.door_configs_per_exit)
+        total_evals = (len(self.floor_plans) *
+                       self.config.exit_configs_per_plan *
+                       self.config.door_configs_per_exit *
+                       self.config.monte_carlo_runs_per_config)
         completed = 0
         start_time = time.time()
         results_file = os.path.join(self.config.output_dir, 'simulation_results.jsonl')
 
-        logger.info(f"  Evaluating up to {total_configs} configurations...")
+        logger.info(f"  Total evaluations: {total_evals} "
+                   f"({len(self.floor_plans)} plans × {self.config.exit_configs_per_plan} exits × "
+                   f"{self.config.door_configs_per_exit} doors × {self.config.monte_carlo_runs_per_config} scenarios)")
 
-        # Monte Carlo parameters
+        # Monte Carlo parameters for scenario generation
         mc_params = {
-            'monte_carlo_runs': self.config.monte_carlo_runs_per_config,
             'occupant_density_range': self.config.occupant_density_range,
             'num_fires_range': self.config.num_fires_range,
             'fire_spread_rate_range': self.config.fire_spread_rate_range,
             'fire_intensity_growth_range': self.config.fire_intensity_growth_range,
             'fire_discovery_delay_range': self.config.fire_discovery_delay_range,
             'fire_damage_threshold': self.config.fire_damage_threshold,
-            'max_steps': self.config.max_steps
         }
 
         with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
@@ -772,7 +982,7 @@ class TrainingDataGeneratorV5:
             for plan_id, floor_plan in self.floor_plans.items():
                 plan_start_time = time.time()
 
-                # Original door count (to keep constant)
+                # Original door count
                 num_doors = len(floor_plan.door_positions)
 
                 # Generate exit configurations
@@ -783,8 +993,16 @@ class TrainingDataGeneratorV5:
 
                 logger.info(f"  Floor plan {plan_id}: {len(exit_configs)} exit configs")
 
-                # For each exit config, generate door configs
-                tasks = []
+                grid_list = floor_plan.grid.tolist()
+
+                # Find passable positions for scenario generation
+                passable_positions = []
+                for y in range(floor_plan.grid.shape[0]):
+                    for x in range(floor_plan.grid.shape[1]):
+                        if floor_plan.grid[y, x] == 0:
+                            passable_positions.append((x, y))
+
+                # For each exit config, generate door configs and shared scenarios
                 for exit_id, exit_config in enumerate(exit_configs):
                     door_configs = self._generate_door_configs_for_exit(
                         floor_plan,
@@ -793,89 +1011,101 @@ class TrainingDataGeneratorV5:
                         seed=self.config.seed + plan_id * 1000 + exit_id * 100
                     )
 
-                    # Create evaluation tasks
-                    grid_list = floor_plan.grid.tolist()
+                    # Pre-generate K scenarios for this (plan, exit_config)
+                    # All door configs will be evaluated under each scenario
+                    scenarios = []
+                    for scenario_idx in range(self.config.monte_carlo_runs_per_config):
+                        scenario_seed = (self.config.seed + plan_id * 10000 +
+                                        exit_id * 1000 + scenario_idx)
+                        scenario = generate_scenario(passable_positions, mc_params, scenario_seed)
+                        scenarios.append(scenario)
+
+                    # Create evaluation tasks: each (door_config, scenario) pair
+                    tasks = []
                     for config_id, door_config in enumerate(door_configs):
-                        tasks.append((
-                            plan_id,
-                            exit_id,
-                            config_id,
-                            grid_list,
-                            door_config,
-                            mc_params
-                        ))
+                        for scenario in scenarios:
+                            tasks.append((
+                                plan_id,
+                                exit_id,
+                                config_id,
+                                grid_list,
+                                door_config,
+                                scenario,
+                                self.config.max_steps
+                            ))
 
-                logger.info(f"  Floor plan {plan_id}: {len(tasks)} total configs "
-                           f"({len(exit_configs)} exits × {self.config.door_configs_per_exit} doors)")
+                    logger.debug(f"    Exit {exit_id}: {len(door_configs)} door configs × "
+                                f"{len(scenarios)} scenarios = {len(tasks)} evaluations")
 
-                # Submit tasks
-                futures = {
-                    executor.submit(evaluate_door_config_monte_carlo_v5, task): task
-                    for task in tasks
-                }
+                    # Submit tasks
+                    futures = {
+                        executor.submit(evaluate_door_config_with_scenario, task): task
+                        for task in tasks
+                    }
 
-                # Process results
-                for future in as_completed(futures):
-                    try:
-                        result = future.result()
+                    # Process results
+                    for future in as_completed(futures):
+                        try:
+                            result = future.result()
 
-                        if 'error' not in result:
-                            # Convert to HierarchicalSimulationResult
-                            sim_result = HierarchicalSimulationResult(
-                                floor_plan_id=result['floor_plan_id'],
-                                exit_config_id=result['exit_config_id'],
-                                config_id=result['config_id'],
-                                config={'door_config': result['door_config']},
-                                scenario={'monte_carlo_runs': result['num_runs']},
-                                survival_rate=result['survival_rate'],
-                                avg_evacuation_time=result['avg_steps'] * 0.5,
-                                steps=int(result['avg_steps']),
-                                evacuated=result['evacuated'],
-                                stuck=result['survived'] - result['evacuated'],
-                                dead=result['dead'],
-                                avg_fire_damage=result['avg_fire_damage']
-                            )
-                            self.all_results.append(sim_result)
+                            if 'error' not in result:
+                                # Convert to HierarchicalSimulationResult with scenario_hash
+                                sim_result = HierarchicalSimulationResult(
+                                    floor_plan_id=result['floor_plan_id'],
+                                    exit_config_id=result['exit_config_id'],
+                                    config_id=result['config_id'],
+                                    config={'door_config': result['door_config']},
+                                    scenario=result.get('scenario', {}),
+                                    survival_rate=result['survival_rate'],
+                                    avg_evacuation_time=result['avg_steps'] * 0.5,
+                                    steps=int(result['avg_steps']),
+                                    evacuated=result['evacuated'],
+                                    stuck=result['survived'] - result['evacuated'],
+                                    dead=result['dead'],
+                                    avg_fire_damage=result['avg_fire_damage'],
+                                    scenario_hash=result.get('scenario_hash', '')
+                                )
+                                self.all_results.append(sim_result)
 
-                            # Save result immediately
-                            with open(results_file, 'a') as f:
-                                result_dict = {
-                                    'floor_plan_id': sim_result.floor_plan_id,
-                                    'exit_config_id': sim_result.exit_config_id,
-                                    'config_id': sim_result.config_id,
-                                    'config': sim_result.config,
-                                    'scenario': sim_result.scenario,
-                                    'survival_rate': sim_result.survival_rate,
-                                    'avg_evacuation_time': sim_result.avg_evacuation_time,
-                                    'steps': sim_result.steps,
-                                    'evacuated': sim_result.evacuated,
-                                    'stuck': sim_result.stuck,
-                                    'dead': sim_result.dead,
-                                    'avg_fire_damage': sim_result.avg_fire_damage,
-                                    'score': sim_result.score
-                                }
-                                f.write(json.dumps(result_dict) + '\n')
+                                # Save result immediately
+                                with open(results_file, 'a') as f:
+                                    result_dict = {
+                                        'floor_plan_id': sim_result.floor_plan_id,
+                                        'exit_config_id': sim_result.exit_config_id,
+                                        'config_id': sim_result.config_id,
+                                        'config': sim_result.config,
+                                        'scenario': sim_result.scenario,
+                                        'scenario_hash': sim_result.scenario_hash,
+                                        'survival_rate': sim_result.survival_rate,
+                                        'avg_evacuation_time': sim_result.avg_evacuation_time,
+                                        'steps': sim_result.steps,
+                                        'evacuated': sim_result.evacuated,
+                                        'stuck': sim_result.stuck,
+                                        'dead': sim_result.dead,
+                                        'avg_fire_damage': sim_result.avg_fire_damage,
+                                        'score': sim_result.score
+                                    }
+                                    f.write(json.dumps(result_dict, cls=NumpyEncoder) + '\n')
 
-                        completed += 1
+                            completed += 1
 
-                        if completed % 100 == 0:
-                            elapsed = time.time() - start_time
-                            rate = completed / elapsed
-                            remaining = total_configs - completed
-                            eta = remaining / rate if rate > 0 else 0
-                            logger.info(
-                                f"  Completed {completed}/{total_configs} configs "
-                                f"({len(self.all_results)} valid) - ETA: {timedelta(seconds=int(eta))}"
-                            )
+                            if completed % 500 == 0:
+                                elapsed = time.time() - start_time
+                                rate = completed / elapsed
+                                remaining = total_evals - completed
+                                eta = remaining / rate if rate > 0 else 0
+                                logger.info(
+                                    f"  Completed {completed}/{total_evals} evaluations "
+                                    f"({len(self.all_results)} valid) - ETA: {timedelta(seconds=int(eta))}"
+                                )
 
-                            if completed % self.config.checkpoint_interval == 0:
-                                self._save_checkpoint_metadata(completed, total_configs)
+                                if completed % (self.config.checkpoint_interval * 10) == 0:
+                                    self._save_checkpoint_metadata(completed, total_evals)
 
-                    except Exception as e:
-                        logger.error(f"Task failed: {e}")
+                        except Exception as e:
+                            logger.error(f"Task failed: {e}")
 
                 # Clean up
-                del tasks
                 del grid_list
 
                 plan_elapsed = time.time() - plan_start_time
@@ -894,6 +1124,11 @@ class TrainingDataGeneratorV5:
         logger.info(f"  Cross-exit: {int(total_pairs * self.config.cross_exit_ratio)}")
         logger.info(f"  Cross-plan: {int(total_pairs * self.config.cross_plan_ratio)}")
 
+        # Normalize scores by floor plan before pairing
+        # This makes margin threshold meaningful across plans with different difficulties
+        logger.info(f"  Normalizing scores by floor plan...")
+        self.all_results = self.pair_constructor.normalize_scores_by_plan(self.all_results)
+
         # Construct pairs
         self.all_pairs = self.hierarchical_pair_constructor.construct_hierarchical_pairs(
             self.all_results,
@@ -904,7 +1139,7 @@ class TrainingDataGeneratorV5:
         raw_pairs_file = os.path.join(self.config.output_dir, 'raw_pairs.jsonl')
         with open(raw_pairs_file, 'w') as f:
             for pair in self.all_pairs:
-                f.write(json.dumps(pair.to_dict()) + '\n')
+                f.write(json.dumps(pair.to_dict(), cls=NumpyEncoder) + '\n')
 
         # Balance labels
         self.all_pairs = self.pair_constructor.balance_labels(self.all_pairs)

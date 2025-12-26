@@ -651,6 +651,9 @@ def create_dataset_splits(
     """
     Split pairs by floor plan (not by individual pair) to prevent data leakage.
 
+    Cross-plan pairs are filtered to ensure both floor_plan_id_a and floor_plan_id_b
+    are in the same split, preventing test data from leaking into training.
+
     Args:
         pairs: All pairwise labels
         train_ratio: Proportion for training
@@ -662,16 +665,14 @@ def create_dataset_splits(
     """
     rng = np.random.default_rng(seed)
 
-    # Group pairs by floor plan
-    by_plan: Dict[int, List[Dict]] = defaultdict(list)
+    # Collect all unique floor plan IDs from both sides of pairs
+    all_plan_ids = set()
     for pair in pairs:
-        # Use floor_plan_id_a as the primary grouping
-        # (for within-plan pairs, both IDs are the same)
-        plan_id = pair.get('floor_plan_id_a')
-        by_plan[plan_id].append(pair)
+        all_plan_ids.add(pair.get('floor_plan_id_a'))
+        all_plan_ids.add(pair.get('floor_plan_id_b'))
 
     # Shuffle plan IDs
-    plan_ids = list(by_plan.keys())
+    plan_ids = list(all_plan_ids)
     rng.shuffle(plan_ids)
 
     # Split by plans
@@ -683,18 +684,32 @@ def create_dataset_splits(
     val_plan_ids = set(plan_ids[n_train:n_train + n_val])
     test_plan_ids = set(plan_ids[n_train + n_val:])
 
-    # Assign pairs to splits
+    # Assign pairs to splits - BOTH floor plan IDs must be in the same split
+    # This prevents cross-plan pairs from leaking data across splits
     train_pairs = []
     val_pairs = []
     test_pairs = []
+    filtered_count = 0
 
-    for plan_id, plan_pairs in by_plan.items():
-        if plan_id in train_plan_ids:
-            train_pairs.extend(plan_pairs)
-        elif plan_id in val_plan_ids:
-            val_pairs.extend(plan_pairs)
+    for pair in pairs:
+        plan_a = pair.get('floor_plan_id_a')
+        plan_b = pair.get('floor_plan_id_b')
+
+        # Check if both plans are in the same split
+        if plan_a in train_plan_ids and plan_b in train_plan_ids:
+            train_pairs.append(pair)
+        elif plan_a in val_plan_ids and plan_b in val_plan_ids:
+            val_pairs.append(pair)
+        elif plan_a in test_plan_ids and plan_b in test_plan_ids:
+            test_pairs.append(pair)
         else:
-            test_pairs.extend(plan_pairs)
+            # Cross-plan pair spans splits - filter it out to prevent leakage
+            filtered_count += 1
+
+    if filtered_count > 0:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Filtered {filtered_count} cross-split pairs to prevent data leakage")
 
     return train_pairs, val_pairs, test_pairs
 

@@ -20,6 +20,18 @@ import json
 import random
 
 
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 @dataclass
 class SimulationResult:
     """Result from a single simulation run"""
@@ -37,6 +49,13 @@ class SimulationResult:
     dead: int
     avg_fire_damage: float
 
+    # Scenario fingerprint for pairing - ensures paired configs were evaluated
+    # under identical conditions (same fire/agent positions)
+    scenario_hash: str = ""
+
+    # Normalized score (set by PairConstructor.normalize_scores_by_plan)
+    normalized_score: Optional[float] = None
+
     # Composite score for ranking
     @property
     def score(self) -> float:
@@ -49,6 +68,11 @@ class SimulationResult:
             (self.steps / 1000) * 1.0 -
             self.avg_fire_damage * 0.5
         )
+
+    @property
+    def effective_score(self) -> float:
+        """Return normalized score if available, otherwise raw score"""
+        return self.normalized_score if self.normalized_score is not None else self.score
 
 
 @dataclass
@@ -379,7 +403,17 @@ class PairConstructor:
         selection_strategy: str
     ) -> Optional[PairwiseLabel]:
         """Create a pairwise label from two results"""
-        score_diff = result_a.score - result_b.score
+        # For within-plan pairs, enforce scenario hash matching to ensure
+        # both configs were evaluated under identical conditions
+        if result_a.floor_plan_id == result_b.floor_plan_id:
+            if result_a.scenario_hash and result_b.scenario_hash:
+                if result_a.scenario_hash != result_b.scenario_hash:
+                    return None  # Reject mismatched scenarios
+
+        # Use effective_score (normalized if available, otherwise raw)
+        score_a = result_a.effective_score
+        score_b = result_b.effective_score
+        score_diff = score_a - score_b
 
         # Skip ambiguous pairs
         if abs(score_diff) < self.margin:
@@ -398,12 +432,57 @@ class PairConstructor:
             config_b=result_b.config,
             scenario_a=result_a.scenario,
             scenario_b=result_b.scenario,
-            score_a=result_a.score,
+            score_a=result_a.score,  # Store raw scores for reference
             score_b=result_b.score,
             label=label,
             label_confidence=confidence,
             pair_type=f"{pair_type}_{selection_strategy}"
         )
+
+    def normalize_scores_by_plan(
+        self,
+        results: List[SimulationResult]
+    ) -> List[SimulationResult]:
+        """
+        Normalize scores per floor plan using z-score normalization.
+
+        This makes the margin threshold meaningful across plans with different
+        baseline difficulties. Without normalization, a hard plan might have all
+        scores in 0.5-0.6 range while an easy plan has 0.85-0.95, making margin
+        filtering inconsistent.
+
+        Args:
+            results: List of simulation results
+
+        Returns:
+            Same results with normalized_score field populated
+        """
+        # Group by floor plan
+        by_plan = defaultdict(list)
+        for result in results:
+            by_plan[result.floor_plan_id].append(result)
+
+        # Normalize within each plan
+        for plan_id, plan_results in by_plan.items():
+            if len(plan_results) < 2:
+                # Can't normalize with single result
+                for r in plan_results:
+                    r.normalized_score = r.score
+                continue
+
+            scores = np.array([r.score for r in plan_results])
+            mean = np.mean(scores)
+            std = np.std(scores)
+
+            if std < 1e-8:
+                # No variance - all configs perform the same
+                for r in plan_results:
+                    r.normalized_score = 0.0
+            else:
+                for r in plan_results:
+                    r.normalized_score = (r.score - mean) / std
+
+        return results
 
     def balance_labels(
         self,
@@ -503,7 +582,7 @@ class PairWriter:
             filepath = os.path.join(self.output_dir, filename)
             with open(filepath, 'w') as f:
                 for pair in pairs:
-                    f.write(json.dumps(pair.to_dict()) + '\n')
+                    f.write(json.dumps(pair.to_dict(), cls=NumpyEncoder) + '\n')
             written_files.append(filepath)
         else:
             # Multiple shards
@@ -517,7 +596,7 @@ class PairWriter:
 
                 with open(filepath, 'w') as f:
                     for pair in shard_pairs:
-                        f.write(json.dumps(pair.to_dict()) + '\n')
+                        f.write(json.dumps(pair.to_dict(), cls=NumpyEncoder) + '\n')
 
                 written_files.append(filepath)
 

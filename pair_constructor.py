@@ -42,12 +42,12 @@ class SimulationResult:
     def score(self) -> float:
         """Compute ranking score (higher is better)"""
         # Primary: survival rate (weight = 1.0)
-        # Secondary: efficiency - fewer steps is better (weight = 0.5 to amplify differences)
-        # Tertiary: low fire damage (weight = 0.2 to amplify differences)
+        # Secondary: efficiency - fewer steps is better (weight = 1.0, INCREASED from 0.5)
+        # Tertiary: low fire damage (weight = 0.5, INCREASED from 0.2)
         return (
             self.survival_rate * 1.0 -
-            (self.steps / 1000) * 0.5 -
-            self.avg_fire_damage * 0.2
+            (self.steps / 1000) * 1.0 -
+            self.avg_fire_damage * 0.5
         )
 
 

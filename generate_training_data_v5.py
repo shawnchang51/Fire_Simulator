@@ -74,6 +74,7 @@ class GenerationConfigV5:
 
     # Exit/Door configuration parameters
     num_exits_range: Tuple[int, int] = (1, 3)
+    num_doors_range: Tuple[int, int] = (2, 6)  # Allow variable door count
     min_door_spacing: int = 3
     min_exit_spacing: int = 5
 
@@ -81,11 +82,11 @@ class GenerationConfigV5:
     occupant_density_range: Tuple[float, float] = (0.05, 0.15)
     max_steps: int = 500
 
-    # Fire parameter ranges (randomized per MC run)
-    num_fires_range: Tuple[int, int] = (3, 7)
-    fire_spread_rate_range: Tuple[float, float] = (0.3, 0.8)
-    fire_intensity_growth_range: Tuple[float, float] = (0.5, 1.5)
-    fire_discovery_delay_range: Tuple[int, int] = (5, 30)
+    # Fire parameter ranges (randomized per MC run) - INCREASED DIFFICULTY
+    num_fires_range: Tuple[int, int] = (15, 25)  # Was: (3, 7) - more fires
+    fire_spread_rate_range: Tuple[float, float] = (0.5, 1.5)  # Was: (0.3, 0.8) - faster spread
+    fire_intensity_growth_range: Tuple[float, float] = (0.8, 1.8)  # Was: (0.5, 1.5) - faster growth
+    fire_discovery_delay_range: Tuple[int, int] = (10, 40)  # Was: (5, 30) - longer delays
 
     # Fixed parameters
     fire_damage_threshold: float = 10.0
@@ -725,7 +726,7 @@ class TrainingDataGeneratorV5:
 
             generated = candidate_gen.generate_candidate_pool(
                 num_candidates=num_to_generate,
-                num_doors_range=(num_doors, num_doors),  # Fixed door count
+                num_doors_range=self.config.num_doors_range,  # Variable door count
                 num_exits_range=(0, 0),  # No exits, they're already in exit_config
                 random_ratio=0.8
             )
@@ -1010,6 +1011,8 @@ def main():
     parser.add_argument('--same-exit-ratio', type=float, default=0.70)
     parser.add_argument('--cross-exit-ratio', type=float, default=0.20)
     parser.add_argument('--cross-plan-ratio', type=float, default=0.10)
+    parser.add_argument('--num-doors-range', type=int, nargs=2, default=[2, 6],
+                        help='Range of internal door counts (min, max)')
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--output-dir', type=str, default='./training_data_v5')
     parser.add_argument('--seed', type=int, default=42)
@@ -1026,6 +1029,7 @@ def main():
         same_exit_ratio=args.same_exit_ratio,
         cross_exit_ratio=args.cross_exit_ratio,
         cross_plan_ratio=args.cross_plan_ratio,
+        num_doors_range=tuple(args.num_doors_range),
         workers=args.workers,
         output_dir=args.output_dir,
         seed=args.seed

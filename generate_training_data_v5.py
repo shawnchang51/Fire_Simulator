@@ -977,142 +977,151 @@ class TrainingDataGeneratorV5:
             'fire_damage_threshold': self.config.fire_damage_threshold,
         }
 
-        with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
-            # Process one floor plan at a time
-            for plan_id, floor_plan in self.floor_plans.items():
-                plan_start_time = time.time()
+        # Phase 1: Collect all tasks upfront (no executor yet)
+        logger.info("  Phase 1: Generating all tasks...")
+        all_tasks = []
+        grid_cache = {}  # Cache grid lists to avoid repeated conversions
 
-                # Original door count
-                num_doors = len(floor_plan.door_positions)
+        for plan_id, floor_plan in self.floor_plans.items():
+            num_doors = len(floor_plan.door_positions)
 
-                # Generate exit configurations
-                exit_configs = self._generate_exit_configs(
+            exit_configs = self._generate_exit_configs(
+                floor_plan,
+                seed=self.config.seed + plan_id * 1000
+            )
+
+            grid_list = floor_plan.grid.tolist()
+            grid_cache[plan_id] = grid_list
+
+            # Find passable positions for scenario generation
+            passable_positions = []
+            for y in range(floor_plan.grid.shape[0]):
+                for x in range(floor_plan.grid.shape[1]):
+                    if floor_plan.grid[y, x] == 0:
+                        passable_positions.append((x, y))
+
+            for exit_id, exit_config in enumerate(exit_configs):
+                door_configs = self._generate_door_configs_for_exit(
                     floor_plan,
-                    seed=self.config.seed + plan_id * 1000
+                    exit_config,
+                    num_doors=num_doors,
+                    seed=self.config.seed + plan_id * 1000 + exit_id * 100
                 )
 
-                logger.info(f"  Floor plan {plan_id}: {len(exit_configs)} exit configs")
+                # Pre-generate scenarios for this (plan, exit_config)
+                scenarios = []
+                for scenario_idx in range(self.config.monte_carlo_runs_per_config):
+                    scenario_seed = (self.config.seed + plan_id * 10000 +
+                                    exit_id * 1000 + scenario_idx)
+                    scenario = generate_scenario(passable_positions, mc_params, scenario_seed)
+                    scenarios.append(scenario)
 
-                grid_list = floor_plan.grid.tolist()
+                # Create evaluation tasks
+                for config_id, door_config in enumerate(door_configs):
+                    for scenario in scenarios:
+                        all_tasks.append((
+                            plan_id,
+                            exit_id,
+                            config_id,
+                            grid_list,
+                            door_config,
+                            scenario,
+                            self.config.max_steps
+                        ))
 
-                # Find passable positions for scenario generation
-                passable_positions = []
-                for y in range(floor_plan.grid.shape[0]):
-                    for x in range(floor_plan.grid.shape[1]):
-                        if floor_plan.grid[y, x] == 0:
-                            passable_positions.append((x, y))
+            if (plan_id + 1) % 50 == 0:
+                logger.info(f"    Prepared {plan_id + 1}/{len(self.floor_plans)} floor plans...")
 
-                # For each exit config, generate door configs and shared scenarios
-                for exit_id, exit_config in enumerate(exit_configs):
-                    door_configs = self._generate_door_configs_for_exit(
-                        floor_plan,
-                        exit_config,
-                        num_doors=num_doors,
-                        seed=self.config.seed + plan_id * 1000 + exit_id * 100
-                    )
+        logger.info(f"  Generated {len(all_tasks)} total tasks")
 
-                    # Pre-generate K scenarios for this (plan, exit_config)
-                    # All door configs will be evaluated under each scenario
-                    scenarios = []
-                    for scenario_idx in range(self.config.monte_carlo_runs_per_config):
-                        scenario_seed = (self.config.seed + plan_id * 10000 +
-                                        exit_id * 1000 + scenario_idx)
-                        scenario = generate_scenario(passable_positions, mc_params, scenario_seed)
-                        scenarios.append(scenario)
+        # Phase 2: Submit all tasks and process results with batched I/O
+        logger.info("  Phase 2: Executing evaluations...")
+        WRITE_BATCH_SIZE = 500  # Flush to disk every N results
+        result_buffer = []
 
-                    # Create evaluation tasks: each (door_config, scenario) pair
-                    tasks = []
-                    for config_id, door_config in enumerate(door_configs):
-                        for scenario in scenarios:
-                            tasks.append((
-                                plan_id,
-                                exit_id,
-                                config_id,
-                                grid_list,
-                                door_config,
-                                scenario,
-                                self.config.max_steps
-                            ))
+        with ProcessPoolExecutor(max_workers=self.config.workers) as executor:
+            # Submit ALL tasks at once
+            futures = {
+                executor.submit(evaluate_door_config_with_scenario, task): idx
+                for idx, task in enumerate(all_tasks)
+            }
 
-                    logger.debug(f"    Exit {exit_id}: {len(door_configs)} door configs × "
-                                f"{len(scenarios)} scenarios = {len(tasks)} evaluations")
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
 
-                    # Submit tasks
-                    futures = {
-                        executor.submit(evaluate_door_config_with_scenario, task): task
-                        for task in tasks
-                    }
+                    if 'error' in result:
+                        logger.warning(f"Evaluation error: {result.get('error')}")
+                    else:
+                        sim_result = HierarchicalSimulationResult(
+                            floor_plan_id=result['floor_plan_id'],
+                            exit_config_id=result['exit_config_id'],
+                            config_id=result['config_id'],
+                            config={'door_config': result['door_config']},
+                            scenario=result.get('scenario', {}),
+                            survival_rate=result['survival_rate'],
+                            avg_evacuation_time=result['avg_steps'] * 0.5,
+                            steps=int(result['avg_steps']),
+                            evacuated=result['evacuated'],
+                            stuck=result['survived'] - result['evacuated'],
+                            dead=result['dead'],
+                            avg_fire_damage=result['avg_fire_damage'],
+                            scenario_hash=result.get('scenario_hash', '')
+                        )
+                        self.all_results.append(sim_result)
 
-                    # Process results
-                    for future in as_completed(futures):
-                        try:
-                            result = future.result()
+                        # Buffer result for batched writing
+                        result_buffer.append({
+                            'floor_plan_id': sim_result.floor_plan_id,
+                            'exit_config_id': sim_result.exit_config_id,
+                            'config_id': sim_result.config_id,
+                            'config': sim_result.config,
+                            'scenario': sim_result.scenario,
+                            'scenario_hash': sim_result.scenario_hash,
+                            'survival_rate': sim_result.survival_rate,
+                            'avg_evacuation_time': sim_result.avg_evacuation_time,
+                            'steps': sim_result.steps,
+                            'evacuated': sim_result.evacuated,
+                            'stuck': sim_result.stuck,
+                            'dead': sim_result.dead,
+                            'avg_fire_damage': sim_result.avg_fire_damage,
+                            'score': sim_result.score
+                        })
 
-                            if 'error' in result:
-                                logger.warning(f"Evaluation error: {result.get('error')}")
-                            else:
-                                # Convert to HierarchicalSimulationResult with scenario_hash
-                                sim_result = HierarchicalSimulationResult(
-                                    floor_plan_id=result['floor_plan_id'],
-                                    exit_config_id=result['exit_config_id'],
-                                    config_id=result['config_id'],
-                                    config={'door_config': result['door_config']},
-                                    scenario=result.get('scenario', {}),
-                                    survival_rate=result['survival_rate'],
-                                    avg_evacuation_time=result['avg_steps'] * 0.5,
-                                    steps=int(result['avg_steps']),
-                                    evacuated=result['evacuated'],
-                                    stuck=result['survived'] - result['evacuated'],
-                                    dead=result['dead'],
-                                    avg_fire_damage=result['avg_fire_damage'],
-                                    scenario_hash=result.get('scenario_hash', '')
-                                )
-                                self.all_results.append(sim_result)
+                        # Flush buffer when full
+                        if len(result_buffer) >= WRITE_BATCH_SIZE:
+                            with open(results_file, 'a') as f:
+                                for res in result_buffer:
+                                    f.write(json.dumps(res, cls=NumpyEncoder) + '\n')
+                            result_buffer.clear()
 
-                                # Save result immediately
-                                with open(results_file, 'a') as f:
-                                    result_dict = {
-                                        'floor_plan_id': sim_result.floor_plan_id,
-                                        'exit_config_id': sim_result.exit_config_id,
-                                        'config_id': sim_result.config_id,
-                                        'config': sim_result.config,
-                                        'scenario': sim_result.scenario,
-                                        'scenario_hash': sim_result.scenario_hash,
-                                        'survival_rate': sim_result.survival_rate,
-                                        'avg_evacuation_time': sim_result.avg_evacuation_time,
-                                        'steps': sim_result.steps,
-                                        'evacuated': sim_result.evacuated,
-                                        'stuck': sim_result.stuck,
-                                        'dead': sim_result.dead,
-                                        'avg_fire_damage': sim_result.avg_fire_damage,
-                                        'score': sim_result.score
-                                    }
-                                    f.write(json.dumps(result_dict, cls=NumpyEncoder) + '\n')
+                    completed += 1
 
-                            completed += 1
+                    if completed % 500 == 0:
+                        elapsed = time.time() - start_time
+                        rate = completed / elapsed
+                        remaining = total_evals - completed
+                        eta = remaining / rate if rate > 0 else 0
+                        logger.info(
+                            f"  Completed {completed}/{total_evals} evaluations "
+                            f"({len(self.all_results)} valid) - {rate:.1f}/s - ETA: {timedelta(seconds=int(eta))}"
+                        )
 
-                            if completed % 500 == 0:
-                                elapsed = time.time() - start_time
-                                rate = completed / elapsed
-                                remaining = total_evals - completed
-                                eta = remaining / rate if rate > 0 else 0
-                                logger.info(
-                                    f"  Completed {completed}/{total_evals} evaluations "
-                                    f"({len(self.all_results)} valid) - ETA: {timedelta(seconds=int(eta))}"
-                                )
+                        if completed % (self.config.checkpoint_interval * 10) == 0:
+                            self._save_checkpoint_metadata(completed, total_evals)
 
-                                if completed % (self.config.checkpoint_interval * 10) == 0:
-                                    self._save_checkpoint_metadata(completed, total_evals)
+                except Exception as e:
+                    logger.error(f"Task failed: {e}")
 
-                        except Exception as e:
-                            logger.error(f"Task failed: {e}")
+        # Flush remaining buffered results
+        if result_buffer:
+            with open(results_file, 'a') as f:
+                for res in result_buffer:
+                    f.write(json.dumps(res, cls=NumpyEncoder) + '\n')
+            result_buffer.clear()
 
-                # Clean up
-                del grid_list
-
-                plan_elapsed = time.time() - plan_start_time
-                if (plan_id + 1) % 10 == 0:
-                    logger.info(f"  Progress: {plan_id + 1}/{len(self.floor_plans)} floor plans")
+        # Clean up grid cache
+        grid_cache.clear()
 
         logger.info(f"  Evaluated {len(self.all_results)} configurations")
         logger.info(f"  Results saved to {results_file}")

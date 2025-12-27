@@ -1,24 +1,71 @@
-# Core dependencies
-numpy>=1.21.0
-pretty-errors>=1.2.25
-
-# Visualization dependencies
-pygame>=2.1.0  # Optional for graphical visualization
-scipy>=1.7.0   # Required for MATLAB-style visualization
-matplotlib>=3.4.0  # Required for plotting
-
-# Data handling
-pandas>=1.3.0  # For CSV export and data analysis
-json5>=0.9.5   # For robust JSON handling
-
-# Development tools
-black>=21.5b2  # Code formatting
-pylint>=2.8.2  # Code analysis
-pytest>=6.2.4  # Testing framework
-
-# Documentation
-sphinx>=4.0.2  # For generating documentation
-sphinx-rtd-theme>=0.5.2  # Documentation theme
-
-# Optional performance improvements
-numba>=0.53.1  # For accelerating numerical computations
+alabaster==1.0.0
+astroid==4.0.2
+babel==2.17.0
+black==26.1a1
+build==1.3.0
+certifi==2025.11.12
+charset-normalizer==3.4.4
+click==8.3.1
+colorama==0.4.6
+contourpy==1.3.3
+cycler==0.12.1
+dill==0.4.0
+docutils==0.21.2
+fonttools==4.61.1
+geopandas==1.1.2
+idna==3.11
+imagesize==1.4.1
+iniconfig==2.3.0
+isort==7.0.0
+Jinja2==3.1.6
+json5==0.12.1
+kiwisolver==1.4.9
+llvmlite==0.46.0
+MarkupSafe==3.0.3
+matplotlib==3.10.8
+mccabe==0.7.0
+mypy_extensions==1.1.0
+networkx==3.6.1
+numba==0.63.1
+numpy==2.2.6
+opencv-python-headless==4.12.0.88
+packaging==25.0
+pandas==2.3.3
+pathspec==0.12.1
+pillow==12.0.0
+pip-tools==7.5.2
+platformdirs==4.5.1
+pluggy==1.6.0
+pretty-errors==1.2.25
+pygame==2.6.1
+Pygments==2.19.2
+pylint==4.0.4
+pyogrio==0.12.1
+pyparsing==3.3.1
+pyproj==3.7.2
+pyproject_hooks==1.2.0
+pytest==9.0.2
+python-dateutil==2.9.0.post0
+pytokens==0.3.0
+pytz==2025.2
+requests==2.32.5
+roman-numerals==4.1.0
+roman-numerals-py==4.1.0
+scipy==1.16.3
+setuptools==80.9.0
+shapely==2.1.2
+six==1.17.0
+snowballstemmer==3.0.1
+Sphinx==8.2.3
+sphinx-rtd-theme==3.0.2
+sphinxcontrib-applehelp==2.0.0
+sphinxcontrib-devhelp==2.0.0
+sphinxcontrib-htmlhelp==2.1.0
+sphinxcontrib-jquery==4.1
+sphinxcontrib-jsmath==1.0.1
+sphinxcontrib-qthelp==2.0.0
+sphinxcontrib-serializinghtml==2.0.0
+tomlkit==0.13.3
+tzdata==2025.3
+urllib3==2.6.2
+wheel==0.45.1

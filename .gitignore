@@ -18,6 +18,8 @@ sample_floor_plans/
 combined_fast/
 server_results/
 training_data_v5_combined/
+checkpoints/
+logs/
 
 # Virtual environments
 venv/

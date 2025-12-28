@@ -211,7 +211,7 @@ def train_model(
 
     # Load best model
     if checkpoint_path.exists():
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"\nLoaded best model from epoch {checkpoint['epoch']} (val_loss: {checkpoint['val_loss']:.4f})")
 
@@ -224,6 +224,6 @@ def load_checkpoint(
     device: torch.device
 ) -> Dict:
     """Load a model checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     return checkpoint

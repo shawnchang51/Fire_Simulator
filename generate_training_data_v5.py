@@ -199,6 +199,11 @@ class GenerationConfigV5:
     # Random seed
     seed: int = 42
 
+    # Distributed execution (optional)
+    plan_start_idx: Optional[int] = None  # Start index (inclusive)
+    plan_end_idx: Optional[int] = None    # End index (exclusive)
+    evaluation_only: bool = False         # If True, skip pairing phase
+
 
 @dataclass
 class HierarchicalSimulationResult(SimulationResult):
@@ -752,6 +757,22 @@ class TrainingDataGeneratorV5:
         logger.info("\n[Phase 2/4] Evaluating hierarchical configs with Monte Carlo...")
         self._evaluate_hierarchical_configs()
 
+        # Save config for later pairing phase
+        config_path = os.path.join(self.config.output_dir, 'config.json')
+        with open(config_path, 'w') as f:
+            json.dump(asdict(self.config), f, indent=2)
+        logger.info(f"  Saved config to {config_path}")
+
+        # If evaluation-only mode, stop here
+        if self.config.evaluation_only:
+            logger.info("\n" + "=" * 60)
+            logger.info("Evaluation phase complete (evaluation-only mode)!")
+            logger.info(f"Output directory: {self.config.output_dir}")
+            logger.info(f"Simulation results: {os.path.join(self.config.output_dir, 'simulation_results.jsonl')}")
+            logger.info("Run pairing phase separately using run_pairing_phase.py")
+            logger.info("=" * 60)
+            return self.config.output_dir
+
         # Phase 3: Construct three-tier pairwise labels
         logger.info("\n[Phase 3/4] Constructing three-tier pairwise labels...")
         self._construct_hierarchical_pairs()
@@ -781,7 +802,25 @@ class TrainingDataGeneratorV5:
         indices = list(range(len(plans)))
         self.rng.shuffle(indices)
 
+        # Apply plan range filter for distributed execution
+        # Track global index (position in shuffled list) for each plan
+        global_index_map = {}  # maps: resplan_idx -> global_idx
+        if self.config.plan_start_idx is not None or self.config.plan_end_idx is not None:
+            start_idx = self.config.plan_start_idx if self.config.plan_start_idx is not None else 0
+            end_idx = self.config.plan_end_idx if self.config.plan_end_idx is not None else target_count
+            logger.info(f"  Distributed mode: Processing plans [{start_idx}, {end_idx})")
+            # Create list of (global_idx, resplan_idx) tuples for this range
+            indices_with_global = [(i, idx) for i, idx in enumerate(indices) if start_idx <= i < end_idx]
+            indices = [resplan_idx for _, resplan_idx in indices_with_global]
+            global_index_map = {resplan_idx: global_idx for global_idx, resplan_idx in indices_with_global}
+            target_count = len(indices)
+            logger.info(f"  Will process {target_count} plans in this range")
+        else:
+            # No filtering - global index = position in shuffled list
+            global_index_map = {resplan_idx: i for i, resplan_idx in enumerate(indices)}
+
         valid_plans = []
+        valid_plan_global_indices = []  # Track global indices for valid plans
         processed = 0
 
         for idx in indices:
@@ -799,6 +838,7 @@ class TrainingDataGeneratorV5:
                     continue
 
                 valid_plans.append(fp)
+                valid_plan_global_indices.append(global_index_map[idx])
 
                 if len(valid_plans) >= target_count:
                     logger.info(f"  Collected {len(valid_plans)} valid plans (processed {processed})")
@@ -813,17 +853,19 @@ class TrainingDataGeneratorV5:
 
         logger.info(f"  Found {len(valid_plans)} valid plans with doors")
 
-        # Store and save floor plans
+        # Store and save floor plans using global indices
         for i, fp in enumerate(valid_plans):
-            self.floor_plans[i] = fp
+            global_idx = valid_plan_global_indices[i]
+            self.floor_plans[global_idx] = fp
 
             # Save floor plan to disk
             np.savez_compressed(
-                os.path.join(floor_plans_dir, f'plan_{i:05d}.npz'),
+                os.path.join(floor_plans_dir, f'plan_{global_idx:05d}.npz'),
                 grid=fp.grid,
                 door_positions=np.array(fp.door_positions),
                 exit_positions=np.array(fp.exit_positions),
                 resplan_index=fp.plan_index,
+                global_index=global_idx,  # Save global index for reference
                 metadata=fp.metadata
             )
 
@@ -1263,6 +1305,14 @@ def main():
     parser.add_argument('--output-dir', type=str, default='./training_data_v5')
     parser.add_argument('--seed', type=int, default=42)
 
+    # Distributed execution options
+    parser.add_argument('--plan-start-idx', type=int, default=None,
+                        help='Start index for plan range (inclusive, for distributed execution)')
+    parser.add_argument('--plan-end-idx', type=int, default=None,
+                        help='End index for plan range (exclusive, for distributed execution)')
+    parser.add_argument('--evaluation-only', action='store_true',
+                        help='Run evaluation phase only, skip pairing (for distributed execution)')
+
     args = parser.parse_args()
 
     config = GenerationConfigV5(
@@ -1278,7 +1328,10 @@ def main():
         num_doors_range=tuple(args.num_doors_range),
         workers=args.workers,
         output_dir=args.output_dir,
-        seed=args.seed
+        seed=args.seed,
+        plan_start_idx=args.plan_start_idx,
+        plan_end_idx=args.plan_end_idx,
+        evaluation_only=args.evaluation_only
     )
 
     generator = TrainingDataGeneratorV5(config)

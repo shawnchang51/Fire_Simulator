@@ -15,6 +15,9 @@ sample_floor_plans/
 *pkl
 *.npz
 *.png
+combined_fast/
+server_results/
+training_data_v5_combined/
 
 # Virtual environments
 venv/

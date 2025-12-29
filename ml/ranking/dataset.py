@@ -177,47 +177,53 @@ class PairwiseDataset(Dataset):
 
     def _encode_grid(self, floor_plan_id: int, config: Dict) -> torch.Tensor:
         """
-        Create 4-channel tensor from grid and door/exit config.
+        Create 5-channel tensor from grid and door/exit config.
 
         Channels:
             0: Wall mask (grid == -2)
             1: Passable mask (grid == 0)
             2: Door positions
             3: Exit positions
+            4: Valid mask (1.0 for real grid, 0.0 for padding)
 
         Args:
             floor_plan_id: Floor plan ID
             config: Door/exit configuration dict
 
         Returns:
-            Grid tensor of shape (4, H, W)
+            Grid tensor of shape (5, H, W)
         """
         floor_plan = self.floor_plans[floor_plan_id]
         grid = floor_plan['grid']
         H, W = grid.shape
         tH, tW = self.target_size
 
-        # Create 4-channel encoding
-        encoded = np.zeros((4, tH, tW), dtype=np.float32)
+        # Create 5-channel encoding with -1.0 padding
+        encoded = np.full((5, tH, tW), -1.0, dtype=np.float32)
 
         # Handle cases where grid is larger than target size - clip
         H_copy = min(H, tH)
         W_copy = min(W, tW)
 
-        # Channel 0: Wall mask (including padding)
+        # Channel 0: Wall mask (real grid only, padding is -1.0)
         encoded[0, :H_copy, :W_copy] = (grid[:H_copy, :W_copy] == -2).astype(np.float32)
-        encoded[0, H_copy:, :] = 1.0  # Padding as walls
-        encoded[0, :, W_copy:] = 1.0
 
-        # Channel 1: Passable mask
+        # Channel 1: Passable mask (real grid only, padding is -1.0)
         encoded[1, :H_copy, :W_copy] = (grid[:H_copy, :W_copy] == 0).astype(np.float32)
 
-        # Channels 2 & 3: Doors and exits from config
+        # Channels 2 & 3: Initialize real grid area to 0.0, then place doors/exits
+        encoded[2, :H_copy, :W_copy] = 0.0
+        encoded[3, :H_copy, :W_copy] = 0.0
         for item in config.get('door_config', []):
             x, y = parse_position(item['position'])
             if 0 <= y < tH and 0 <= x < tW:
                 channel = 3 if item['type'] == 'exit' else 2
                 encoded[channel, y, x] = 1.0
+
+        # Channel 4: Valid mask (1.0 for real grid, 0.0 for padding)
+        encoded[4, :H_copy, :W_copy] = 1.0
+        encoded[4, H_copy:, :] = 0.0
+        encoded[4, :, W_copy:] = 0.0
 
         return torch.from_numpy(encoded)
 
@@ -366,23 +372,38 @@ class SingleConfigDataset(Dataset):
         return plans
 
     def _encode_grid(self, floor_plan_id: int, config: Dict) -> torch.Tensor:
-        """Create 4-channel tensor from grid and config."""
+        """Create 5-channel tensor from grid and config."""
         floor_plan = self.floor_plans[floor_plan_id]
         grid = floor_plan['grid']
         H, W = grid.shape
         tH, tW = self.target_size
 
-        encoded = np.zeros((4, tH, tW), dtype=np.float32)
-        encoded[0, :H, :W] = (grid == -2).astype(np.float32)
-        encoded[0, H:, :] = 1.0
-        encoded[0, :, W:] = 1.0
-        encoded[1, :H, :W] = (grid == 0).astype(np.float32)
+        # Create 5-channel encoding with -1.0 padding
+        encoded = np.full((5, tH, tW), -1.0, dtype=np.float32)
 
+        # Handle cases where grid is larger than target size - clip
+        H_copy = min(H, tH)
+        W_copy = min(W, tW)
+
+        # Channel 0: Wall mask (real grid only, padding is -1.0)
+        encoded[0, :H_copy, :W_copy] = (grid[:H_copy, :W_copy] == -2).astype(np.float32)
+
+        # Channel 1: Passable mask (real grid only, padding is -1.0)
+        encoded[1, :H_copy, :W_copy] = (grid[:H_copy, :W_copy] == 0).astype(np.float32)
+
+        # Channels 2 & 3: Initialize real grid area to 0.0, then place doors/exits
+        encoded[2, :H_copy, :W_copy] = 0.0
+        encoded[3, :H_copy, :W_copy] = 0.0
         for item in config.get('door_config', []):
             x, y = parse_position(item['position'])
             if 0 <= y < tH and 0 <= x < tW:
                 channel = 3 if item['type'] == 'exit' else 2
                 encoded[channel, y, x] = 1.0
+
+        # Channel 4: Valid mask (1.0 for real grid, 0.0 for padding)
+        encoded[4, :H_copy, :W_copy] = 1.0
+        encoded[4, H_copy:, :] = 0.0
+        encoded[4, :, W_copy:] = 0.0
 
         return torch.from_numpy(encoded)
 

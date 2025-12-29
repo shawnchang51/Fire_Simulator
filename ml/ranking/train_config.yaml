@@ -15,7 +15,7 @@ target_grid_size: [96, 128]
 # ===================
 # Grid Encoding
 # ===================
-num_grid_channels: 4  # wall, passable, doors, exits
+num_grid_channels: 5  # wall, passable, doors, exits, valid_mask
 
 # ===================
 # CNN Encoder Architecture

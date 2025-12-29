@@ -26,7 +26,7 @@ class FloorPlanEncoder(nn.Module):
     """
     CNN encoder for floor plan grids.
 
-    Input: (B, 4, 96, 128) - 4 channels (wall, passable, doors, exits)
+    Input: (B, 5, 96, 128) - 5 channels (wall, passable, doors, exits, valid_mask)
     Output: (B, latent_dim) - K-dimensional latent vector
 
     Architecture:

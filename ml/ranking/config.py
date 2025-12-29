@@ -43,7 +43,7 @@ class RankingConfig:
     target_grid_size: Tuple[int, int] = (96, 128)
 
     # Grid encoding
-    num_grid_channels: int = 4  # wall, passable, doors, exits
+    num_grid_channels: int = 5  # wall, passable, doors, exits, valid_mask
 
     # CNN Encoder
     cnn_channels: List[int] = field(default_factory=lambda: [16, 32, 64])

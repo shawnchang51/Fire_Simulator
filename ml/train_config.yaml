@@ -5,38 +5,38 @@
 # Data Settings
 # =============================================================================
 data_dir: "combined_fast"
-floor_plans_dir: "combined_fast/floor_plans"  # Optional, defaults to {data_dir}/floor_plans
-max_plans: null  # Set to integer to limit number of floor plans (e.g., 100 for quick test)
+floor_plans_dir: "combined_fast/floor_plans"
+max_plans: null
 
 # =============================================================================
 # Grid Processing
 # =============================================================================
-target_grid_size: [96, 128]  # [H, W] - covers max observed sizes
-num_grid_channels: 4  # wall, passable, doors, exits
+target_grid_size: [96, 128]
+num_grid_channels: 4
 
 # =============================================================================
 # CNN Architecture
 # =============================================================================
-cnn_channels: [32, 64, 128, 256]  # Channel sizes for each conv layer
-cnn_kernel_size: 3  # Kernel size for conv layers
+cnn_channels: [64, 128, 256, 512]
+cnn_kernel_size: 3
 
 # =============================================================================
 # Scenario MLP
 # =============================================================================
-scenario_input_dim: 4  # agent_count, num_fires, fire_spread_rate, fire_discovery_delay
-scenario_hidden_dims: [64, 32]  # Hidden layer dimensions for scenario encoder
+scenario_input_dim: 4
+scenario_hidden_dims: [64, 32]
 
 # =============================================================================
-# Combined Head (after CNN + Scenario fusion)
+# Combined Head
 # =============================================================================
-head_hidden_dims: [256, 128, 64]  # Hidden layer dimensions for prediction head
-dropout: 0.2  # Dropout rate
+head_hidden_dims: [512, 256, 128]
+dropout: 0.15   # ⬅ 比 0.2 稍低，深模型更穩
 
 # =============================================================================
 # Output Configuration
 # =============================================================================
-num_outputs: 4  # Number of output targets
-output_names:  # Names of output targets
+num_outputs: 4
+output_names:
   - survival_rate
   - avg_evacuation_time
   - steps
@@ -46,16 +46,16 @@ output_names:  # Names of output targets
 # Training Hyperparameters
 # =============================================================================
 epochs: 100
-batch_size: 64
-lr: 0.001  # Learning rate
-weight_decay: 0.0001  # Weight decay for AdamW optimizer
-patience: 10  # Early stopping patience
+batch_size: 128          # ⬅ 4090 建議
+lr: 0.001                # ⬅ 當作 OneCycleLR 的 max_lr
+weight_decay: 0.0001
+patience: 10
 
 # =============================================================================
 # System Settings
 # =============================================================================
-num_workers: 4  # DataLoader workers
-device: null  # null for auto-detect, or "cuda" / "cpu"
+num_workers: 8            # ⬅ 提高資料吞吐
+device: null
 checkpoint_dir: "checkpoints"
 
 # =============================================================================
@@ -69,5 +69,5 @@ checkpoint_dir: "checkpoints"
 # =============================================================================
 # Evaluation Settings
 # =============================================================================
-eval_only: false  # Set to true to only evaluate existing checkpoint
-checkpoint: null  # Path to checkpoint for evaluation (optional)
+eval_only: false
+checkpoint: null

@@ -2,22 +2,68 @@
 CLI Entry Point for Pairwise Ranking Model
 
 Usage:
-    # Train model
+    # Train model with CLI arguments
     python -m ml.ranking.run_training --mode train --epochs 50
+
+    # Train model with YAML config
+    python -m ml.ranking.run_training --mode train --config config.yaml
+
+    # Train with YAML config + CLI overrides (CLI takes priority)
+    python -m ml.ranking.run_training --mode train --config config.yaml --epochs 100 --learning-rate 0.0005
 
     # Evaluate on test set
     python -m ml.ranking.run_training --mode eval --checkpoint checkpoints/ranking/best_model.pt
 
     # Generate visualizations
     python -m ml.ranking.run_training --mode visualize --checkpoint checkpoints/ranking/best_model.pt --output viz/
+
+Example YAML config (config.yaml):
+    # Data paths
+    data_dir: combined_fast
+    floor_plans_dir: combined_fast/floor_plans
+    target_grid_size: [96, 128]
+    
+    # Model architecture
+    cnn_channels: [16, 32, 64]
+    latent_dim: 8
+    scenario_hidden_dim: 32
+    scenario_output_dim: 16
+    scoring_hidden_dim: 32
+    dropout: 0.3
+    
+    # Loss function
+    loss_type: ranknet  # or 'hinge'
+    margin: 0.1
+    sigma: 1.0
+    
+    # Regularization
+    l1_lambda: 0.005
+    weight_decay: 0.0001
+    
+    # Training
+    batch_size: 128
+    learning_rate: 0.001
+    warmup_epochs: 5
+    epochs: 100
+    early_stopping_patience: 15
+    num_workers: 4
+    
+    # Checkpoint and logging
+    checkpoint_dir: checkpoints/ranking
+    log_dir: logs/ranking
+    
+    # Reproducibility
+    seed: 42
 """
 
 import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import torch
+import yaml
 
 from .config import RankingConfig
 from .dataset import (
@@ -43,6 +89,14 @@ def parse_args():
         choices=['train', 'eval', 'visualize'],
         required=True,
         help="Mode: train, eval, or visualize"
+    )
+
+    # Config file argument
+    parser.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help="Path to YAML config file. CLI arguments override config file values."
     )
 
     # Data arguments
@@ -175,26 +229,181 @@ def parse_args():
     return parser.parse_args()
 
 
+def load_yaml_config(config_path: str) -> Dict[str, Any]:
+    """Load configuration from a YAML file."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config if config else {}
+
+
+def save_config_to_yaml(config: RankingConfig, output_path: str, extra_params: Optional[Dict] = None) -> None:
+    """Save current configuration to a YAML file for reproducibility."""
+    config_dict = {
+        # Data paths
+        'data_dir': config.data_dir,
+        'floor_plans_dir': config.floor_plans_dir,
+        'target_grid_size': list(config.target_grid_size),
+        
+        # Grid encoding
+        'num_grid_channels': config.num_grid_channels,
+        
+        # CNN Encoder
+        'cnn_channels': config.cnn_channels,
+        'latent_dim': config.latent_dim,
+        
+        # Scenario MLP
+        'scenario_input_dim': config.scenario_input_dim,
+        'scenario_hidden_dim': config.scenario_hidden_dim,
+        'scenario_output_dim': config.scenario_output_dim,
+        
+        # Scoring Head
+        'scoring_hidden_dim': config.scoring_hidden_dim,
+        'dropout': config.dropout,
+        
+        # Loss function
+        'loss_type': config.loss_type,
+        'margin': config.margin,
+        'sigma': config.sigma,
+        
+        # Regularization
+        'l1_lambda': config.l1_lambda,
+        'weight_decay': config.weight_decay,
+        
+        # Training
+        'batch_size': config.batch_size,
+        'learning_rate': config.learning_rate,
+        'warmup_epochs': config.warmup_epochs,
+        'epochs': config.epochs,
+        'early_stopping_patience': config.early_stopping_patience,
+        'num_workers': config.num_workers,
+        
+        # Checkpoint and logging
+        'checkpoint_dir': config.checkpoint_dir,
+        'log_dir': config.log_dir,
+        
+        # Reproducibility
+        'seed': config.seed,
+    }
+    
+    if extra_params:
+        config_dict.update(extra_params)
+    
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
+        yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+
 def create_config_from_args(args) -> RankingConfig:
-    """Create RankingConfig from command line arguments."""
-    return RankingConfig(
-        data_dir=args.data_dir,
-        floor_plans_dir=args.floor_plans_dir,
-        latent_dim=args.latent_dim,
-        loss_type=args.loss_type,
-        margin=args.margin,
-        sigma=args.sigma,
-        batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        epochs=args.epochs,
-        warmup_epochs=args.warmup_epochs,
-        early_stopping_patience=args.early_stopping,
-        l1_lambda=args.l1_lambda,
-        weight_decay=args.weight_decay,
-        checkpoint_dir=args.checkpoint_dir,
-        seed=args.seed,
-        num_workers=args.num_workers
-    )
+    """
+    Create RankingConfig from command line arguments and optional YAML config.
+    
+    Priority (highest to lowest):
+    1. CLI arguments (if explicitly provided)
+    2. YAML config file values
+    3. RankingConfig defaults
+    """
+    # Start with defaults from RankingConfig
+    config_kwargs = {}
+    
+    # Load YAML config if provided
+    yaml_config = {}
+    if args.config:
+        print(f"Loading config from: {args.config}")
+        yaml_config = load_yaml_config(args.config)
+        
+        # Map YAML keys to RankingConfig fields
+        yaml_mapping = {
+            'data_dir': 'data_dir',
+            'floor_plans_dir': 'floor_plans_dir',
+            'target_grid_size': 'target_grid_size',
+            'num_grid_channels': 'num_grid_channels',
+            'cnn_channels': 'cnn_channels',
+            'latent_dim': 'latent_dim',
+            'scenario_input_dim': 'scenario_input_dim',
+            'scenario_hidden_dim': 'scenario_hidden_dim',
+            'scenario_output_dim': 'scenario_output_dim',
+            'scoring_hidden_dim': 'scoring_hidden_dim',
+            'dropout': 'dropout',
+            'loss_type': 'loss_type',
+            'margin': 'margin',
+            'sigma': 'sigma',
+            'l1_lambda': 'l1_lambda',
+            'weight_decay': 'weight_decay',
+            'batch_size': 'batch_size',
+            'learning_rate': 'learning_rate',
+            'warmup_epochs': 'warmup_epochs',
+            'epochs': 'epochs',
+            'early_stopping_patience': 'early_stopping_patience',
+            'num_workers': 'num_workers',
+            'checkpoint_dir': 'checkpoint_dir',
+            'log_dir': 'log_dir',
+            'seed': 'seed',
+            'scenario_means': 'scenario_means',
+            'scenario_stds': 'scenario_stds',
+        }
+        
+        for yaml_key, config_key in yaml_mapping.items():
+            if yaml_key in yaml_config:
+                value = yaml_config[yaml_key]
+                # Convert list to tuple for target_grid_size
+                if yaml_key == 'target_grid_size' and isinstance(value, list):
+                    value = tuple(value)
+                config_kwargs[config_key] = value
+    
+    # CLI arguments override YAML config (check against parser defaults)
+    parser_defaults = {
+        'data_dir': 'combined_fast',
+        'floor_plans_dir': 'combined_fast/floor_plans',
+        'latent_dim': 8,
+        'loss_type': 'ranknet',
+        'margin': 0.1,
+        'sigma': 1.0,
+        'batch_size': 128,
+        'learning_rate': 1e-3,
+        'epochs': 100,
+        'warmup_epochs': 5,
+        'early_stopping': 15,
+        'l1_lambda': 0.005,
+        'weight_decay': 1e-4,
+        'checkpoint_dir': 'checkpoints/ranking',
+        'seed': 42,
+        'num_workers': 4,
+    }
+    
+    # Map CLI args to config kwargs (override if not default)
+    cli_to_config = [
+        ('data_dir', 'data_dir'),
+        ('floor_plans_dir', 'floor_plans_dir'),
+        ('latent_dim', 'latent_dim'),
+        ('loss_type', 'loss_type'),
+        ('margin', 'margin'),
+        ('sigma', 'sigma'),
+        ('batch_size', 'batch_size'),
+        ('learning_rate', 'learning_rate'),
+        ('epochs', 'epochs'),
+        ('warmup_epochs', 'warmup_epochs'),
+        ('early_stopping', 'early_stopping_patience'),
+        ('l1_lambda', 'l1_lambda'),
+        ('weight_decay', 'weight_decay'),
+        ('checkpoint_dir', 'checkpoint_dir'),
+        ('seed', 'seed'),
+        ('num_workers', 'num_workers'),
+    ]
+    
+    for cli_arg, config_key in cli_to_config:
+        cli_value = getattr(args, cli_arg, None)
+        default_value = parser_defaults.get(cli_arg)
+        
+        # Override if CLI value is different from default (user explicitly set it)
+        # or if no YAML config was provided
+        if cli_value is not None:
+            if not args.config or cli_value != default_value:
+                config_kwargs[config_key] = cli_value
+            elif config_key not in config_kwargs:
+                # Use CLI default if not in YAML
+                config_kwargs[config_key] = cli_value
+    
+    return RankingConfig(**config_kwargs)
 
 
 def mode_train(args):
@@ -235,6 +444,11 @@ def mode_train(args):
     model, history = train_ranking_model(
         config, train_loader, val_loader, device
     )
+
+    # Save config for reproducibility
+    config_output_path = Path(config.checkpoint_dir) / "config.yaml"
+    save_config_to_yaml(config, str(config_output_path), extra_params={'device': str(device)})
+    print(f"Saved config to {config_output_path}")
 
     # Evaluate on test set
     print("\nEvaluating on test set...")

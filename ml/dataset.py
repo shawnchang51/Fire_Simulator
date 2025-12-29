@@ -200,17 +200,21 @@ class FireSimulationDataset(Dataset):
         H, W = grid.shape
         tH, tW = self.target_size
 
+        # Clip grid dimensions to target size if larger
+        copyH = min(H, tH)
+        copyW = min(W, tW)
+
         # Create 4-channel encoding
         encoded = np.zeros((4, tH, tW), dtype=np.float32)
 
         # Channel 0: Wall mask (including padding)
-        encoded[0, :H, :W] = (grid == -2).astype(np.float32)
+        encoded[0, :copyH, :copyW] = (grid[:copyH, :copyW] == -2).astype(np.float32)
         # Padding treated as walls
-        encoded[0, H:, :] = 1.0
-        encoded[0, :, W:] = 1.0
+        encoded[0, copyH:, :] = 1.0
+        encoded[0, :, copyW:] = 1.0
 
         # Channel 1: Passable mask
-        encoded[1, :H, :W] = (grid == 0).astype(np.float32)
+        encoded[1, :copyH, :copyW] = (grid[:copyH, :copyW] == 0).astype(np.float32)
 
         # Channels 2 & 3: Doors and exits from config
         for item in config.get('door_config', []):

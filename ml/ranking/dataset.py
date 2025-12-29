@@ -200,13 +200,17 @@ class PairwiseDataset(Dataset):
         # Create 4-channel encoding
         encoded = np.zeros((4, tH, tW), dtype=np.float32)
 
+        # Handle cases where grid is larger than target size - clip
+        H_copy = min(H, tH)
+        W_copy = min(W, tW)
+
         # Channel 0: Wall mask (including padding)
-        encoded[0, :H, :W] = (grid == -2).astype(np.float32)
-        encoded[0, H:, :] = 1.0  # Padding as walls
-        encoded[0, :, W:] = 1.0
+        encoded[0, :H_copy, :W_copy] = (grid[:H_copy, :W_copy] == -2).astype(np.float32)
+        encoded[0, H_copy:, :] = 1.0  # Padding as walls
+        encoded[0, :, W_copy:] = 1.0
 
         # Channel 1: Passable mask
-        encoded[1, :H, :W] = (grid == 0).astype(np.float32)
+        encoded[1, :H_copy, :W_copy] = (grid[:H_copy, :W_copy] == 0).astype(np.float32)
 
         # Channels 2 & 3: Doors and exits from config
         for item in config.get('door_config', []):

@@ -385,7 +385,7 @@ def load_checkpoint(
     Load model from checkpoint.
 
     Args:
-        checkpoint_path: Path to checkpoint file
+        checkpoint_path: Path to checkpoint file or directory containing best_model.pt
         config: Optional config (uses saved config if None)
         device: Device to load to
 
@@ -395,7 +395,34 @@ def load_checkpoint(
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    # Handle directory path - auto-detect checkpoint file
+    checkpoint_path = Path(checkpoint_path)
+    if checkpoint_path.is_dir():
+        # Look for common checkpoint file names
+        candidates = ['best_model.pt', 'checkpoint.pt', 'model.pt']
+        found = None
+        for name in candidates:
+            candidate_path = checkpoint_path / name
+            if candidate_path.exists():
+                found = candidate_path
+                break
+        
+        if found is None:
+            # Try to find any .pt file
+            pt_files = list(checkpoint_path.glob('*.pt'))
+            if pt_files:
+                found = pt_files[0]
+        
+        if found is None:
+            raise FileNotFoundError(
+                f"No checkpoint file found in directory: {checkpoint_path}\n"
+                f"Expected one of: {candidates} or any .pt file"
+            )
+        
+        print(f"  Auto-detected checkpoint: {found}")
+        checkpoint_path = found
+
+    checkpoint = torch.load(str(checkpoint_path), map_location=device)
 
     # Use saved config if not provided
     if config is None:

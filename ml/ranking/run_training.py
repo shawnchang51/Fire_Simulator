@@ -398,10 +398,15 @@ def create_config_from_args(args) -> RankingConfig:
         # or if no YAML config was provided
         if cli_value is not None:
             if not args.config or cli_value != default_value:
+                # User explicitly set CLI value or no YAML config
                 config_kwargs[config_key] = cli_value
             elif config_key not in config_kwargs:
-                # Use CLI default if not in YAML
+                # YAML config provided but doesn't have this key - use CLI default
                 config_kwargs[config_key] = cli_value
+    
+    # Ensure num_workers is always set (fallback to default if still None)
+    if config_kwargs.get('num_workers') is None:
+        config_kwargs['num_workers'] = 4
     
     return RankingConfig(**config_kwargs)
 

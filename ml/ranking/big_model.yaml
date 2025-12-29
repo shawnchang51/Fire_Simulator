@@ -20,20 +20,20 @@ num_grid_channels: 4  # wall, passable, doors, exits
 # ===================
 # CNN Encoder Architecture
 # ===================
-cnn_channels: [16, 32, 64]  # Channel dimensions for CNN layers
-latent_dim: 32               # Dimension of latent vector (K) for interpretability
+cnn_channels: [64, 128, 256]  # Channel dimensions for CNN layers
+latent_dim: 64               # Dimension of latent vector (K) for interpretability
 
 # ===================
 # Scenario MLP Architecture
 # ===================
 scenario_input_dim: 4       # agent_count, num_fires, fire_spread_rate, fire_discovery_delay
-scenario_hidden_dim: 16
-scenario_output_dim: 16
+scenario_hidden_dim: 32
+scenario_output_dim: 32
 
 # ===================
 # Scoring Head Architecture
 # ===================
-scoring_hidden_dim: 64
+scoring_hidden_dim: 128
 dropout: 0.2
 
 # ===================

@@ -99,6 +99,7 @@ class PairwiseDataset(Dataset):
         pairs: List of pairwise label dictionaries
         floor_plans: Dict mapping floor_plan_id to grid data
         scenario_stats: Normalization statistics for scenarios
+        augment: Whether to apply random shift augmentation (train only)
     """
 
     def __init__(
@@ -108,7 +109,8 @@ class PairwiseDataset(Dataset):
         target_size: Tuple[int, int] = (96, 128),
         scenario_stats: Optional[Dict] = None,
         compute_stats: bool = False,
-        max_pairs: Optional[int] = None
+        max_pairs: Optional[int] = None,
+        augment: bool = False
     ):
         """
         Initialize the dataset.
@@ -120,8 +122,10 @@ class PairwiseDataset(Dataset):
             scenario_stats: Pre-computed normalization stats (from train set)
             compute_stats: If True, compute stats from this file
             max_pairs: Maximum number of pairs to load (for debugging)
+            augment: If True, apply random shift augmentation (for training)
         """
         self.target_size = target_size
+        self.augment = augment
 
         # Load pairs
         self.pairs = self._load_pairs(pairs_file, max_pairs)
@@ -227,6 +231,62 @@ class PairwiseDataset(Dataset):
 
         return torch.from_numpy(encoded)
 
+    def _random_shift_grid(self, grid: torch.Tensor) -> torch.Tensor:
+        """
+        Apply random shift augmentation to grid (right and down only).
+        
+        Since floor plans are positioned at the top-left corner, we can only
+        shift right and down without losing content. The shift amount is
+        computed based on the valid mask (channel 4) to ensure no content
+        goes out of bounds.
+        
+        Args:
+            grid: Grid tensor of shape (5, H, W)
+            
+        Returns:
+            Shifted grid tensor with padding filled appropriately
+        """
+        _, tH, tW = grid.shape
+        valid_mask = grid[4]  # Channel 4 is the valid mask
+        
+        # Find the bounding box of valid content
+        # valid_mask is 1.0 for real grid, 0.0 for padding
+        valid_rows = (valid_mask.sum(dim=1) > 0).nonzero(as_tuple=True)[0]
+        valid_cols = (valid_mask.sum(dim=0) > 0).nonzero(as_tuple=True)[0]
+        
+        if len(valid_rows) == 0 or len(valid_cols) == 0:
+            return grid  # No valid content, return as-is
+        
+        # Content spans from (0, 0) to (max_row, max_col) since it's top-left aligned
+        max_row = valid_rows[-1].item()
+        max_col = valid_cols[-1].item()
+        
+        # Calculate maximum possible shift
+        max_shift_down = tH - 1 - max_row
+        max_shift_right = tW - 1 - max_col
+        
+        if max_shift_down <= 0 and max_shift_right <= 0:
+            return grid  # No room to shift
+        
+        # Random shift amounts (can be 0)
+        shift_down = np.random.randint(0, max_shift_down + 1) if max_shift_down > 0 else 0
+        shift_right = np.random.randint(0, max_shift_right + 1) if max_shift_right > 0 else 0
+        
+        if shift_down == 0 and shift_right == 0:
+            return grid  # No shift needed
+        
+        # Create new grid with padding values
+        # Channels 0-3: -1.0 for padding, Channel 4: 0.0 for padding
+        shifted = torch.full_like(grid, -1.0)
+        shifted[4] = 0.0  # Valid mask padding is 0.0
+        
+        # Copy content to new position
+        src_h = tH - shift_down
+        src_w = tW - shift_right
+        shifted[:, shift_down:, shift_right:] = grid[:, :src_h, :src_w]
+        
+        return shifted
+
     def _normalize_scenario(self, scenario: Dict) -> torch.Tensor:
         """
         Normalize scenario parameters.
@@ -272,6 +332,11 @@ class PairwiseDataset(Dataset):
         # Encode grids
         grid_a = self._encode_grid(pair['floor_plan_id_a'], pair['config_a'])
         grid_b = self._encode_grid(pair['floor_plan_id_b'], pair['config_b'])
+
+        # Apply random shift augmentation (training only, independent for each grid)
+        if self.augment:
+            grid_a = self._random_shift_grid(grid_a)
+            grid_b = self._random_shift_grid(grid_b)
 
         # Normalize scenarios
         scenario_a = self._normalize_scenario(pair['scenario_a'])
@@ -495,7 +560,8 @@ def create_pairwise_dataloaders(
         floor_plans_dir=config.floor_plans_dir,
         target_size=config.target_grid_size,
         scenario_stats=scenario_stats,
-        compute_stats=False
+        compute_stats=False,
+        augment=config.augment_shift  # Random shift augmentation for training only
     )
 
     val_dataset = PairwiseDataset(

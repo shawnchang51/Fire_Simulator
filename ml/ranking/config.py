@@ -82,6 +82,9 @@ class RankingConfig:
     # Reproducibility
     seed: Optional[int] = 42
 
+    # Data Augmentation
+    augment_shift: bool = True  # Random shift augmentation for training
+
     # Normalization stats (computed from training data)
     scenario_means: Optional[List[float]] = None
     scenario_stds: Optional[List[float]] = None

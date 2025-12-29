@@ -283,6 +283,9 @@ def save_config_to_yaml(config: RankingConfig, output_path: str, extra_params: O
         
         # Reproducibility
         'seed': config.seed,
+        
+        # Data Augmentation
+        'augment_shift': config.augment_shift,
     }
     
     if extra_params:
@@ -338,6 +341,7 @@ def create_config_from_args(args) -> RankingConfig:
             'checkpoint_dir': 'checkpoint_dir',
             'log_dir': 'log_dir',
             'seed': 'seed',
+            'augment_shift': 'augment_shift',
             'scenario_means': 'scenario_means',
             'scenario_stds': 'scenario_stds',
         }
@@ -435,6 +439,7 @@ def mode_train(args):
     print(f"  Loss type: {config.loss_type}")
     print(f"  Batch size: {config.batch_size}")
     print(f"  Learning rate: {config.learning_rate}")
+    print(f"  Augment shift: {config.augment_shift}")
     print(f"  Device: {device}")
     print()
 

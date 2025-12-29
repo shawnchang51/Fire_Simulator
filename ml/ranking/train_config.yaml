@@ -71,6 +71,11 @@ log_dir: logs/ranking
 seed: 42
 
 # ===================
+# Data Augmentation
+# ===================
+augment_shift: true  # Random shift augmentation for training (avoid position bias)
+
+# ===================
 # Normalization Stats (optional, computed from training data if not provided)
 # ===================
 # scenario_means: [100.0, 2.0, 1.0, 10.0]

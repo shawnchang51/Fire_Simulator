@@ -27,14 +27,14 @@ latent_dim: 8               # Dimension of latent vector (K) for interpretabilit
 # Scenario MLP Architecture
 # ===================
 scenario_input_dim: 4       # agent_count, num_fires, fire_spread_rate, fire_discovery_delay
-scenario_hidden_dim: 32
-scenario_output_dim: 16
+scenario_hidden_dim: 8
+scenario_output_dim: 8
 
 # ===================
 # Scoring Head Architecture
 # ===================
-scoring_hidden_dim: 32
-dropout: 0.3
+scoring_hidden_dim: 16
+dropout: 0.2
 
 # ===================
 # Loss Function
@@ -57,7 +57,7 @@ learning_rate: 0.001    # Initial learning rate
 warmup_epochs: 5        # Number of warmup epochs
 epochs: 100             # Maximum training epochs
 early_stopping_patience: 15  # Patience for early stopping
-num_workers: 4          # Number of data loading workers
+num_workers:           # Number of data loading workers
 
 # ===================
 # Checkpoint and Logging

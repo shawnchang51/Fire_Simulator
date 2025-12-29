@@ -5,6 +5,7 @@ Usage:
     python -m ml.run_training
     python -m ml.run_training --epochs 50 --batch_size 128
     python -m ml.run_training --max_plans 100  # Quick test with subset
+    python -m ml.run_training --config config.yaml  # Load from YAML config
 """
 
 import argparse
@@ -12,6 +13,7 @@ import json
 from pathlib import Path
 
 import torch
+import yaml
 
 from .config import ModelConfig
 from .dataset import create_dataloaders
@@ -20,8 +22,18 @@ from .train import train_model, load_checkpoint
 from .evaluate import evaluate_model, print_evaluation_report
 
 
+def load_yaml_config(config_path: str) -> dict:
+    """Load configuration from YAML file."""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Fire Simulation Surrogate Model")
+
+    # Config file
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to YAML config file (overrides other arguments)")
 
     # Data
     parser.add_argument("--data_dir", type=str, default="combined_fast",
@@ -65,27 +77,44 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Load YAML config if provided
+    yaml_config = {}
+    if args.config:
+        print(f"Loading config from: {args.config}")
+        yaml_config = load_yaml_config(args.config)
+
+    # Helper function to get config value (YAML takes priority, then CLI args)
+    def get_config(key, default=None):
+        if key in yaml_config:
+            return yaml_config[key]
+        return getattr(args, key, default)
+
     # Create config
     config = ModelConfig(
-        data_dir=args.data_dir,
-        floor_plans_dir=f"{args.data_dir}/floor_plans",
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        learning_rate=args.lr,
-        weight_decay=args.weight_decay,
-        early_stopping_patience=args.patience,
-        dropout=args.dropout,
-        num_workers=args.num_workers,
-        checkpoint_dir=args.checkpoint_dir,
-        max_plans=args.max_plans
+        data_dir=get_config('data_dir', 'combined_fast'),
+        floor_plans_dir=get_config('floor_plans_dir', f"{get_config('data_dir', 'combined_fast')}/floor_plans"),
+        epochs=get_config('epochs', 100),
+        batch_size=get_config('batch_size', 64),
+        learning_rate=get_config('lr', 1e-3),
+        weight_decay=get_config('weight_decay', 1e-4),
+        early_stopping_patience=get_config('patience', 10),
+        dropout=get_config('dropout', 0.2),
+        num_workers=get_config('num_workers', 4),
+        checkpoint_dir=get_config('checkpoint_dir', 'checkpoints'),
+        max_plans=get_config('max_plans', None)
     )
 
     # Device
-    if args.device:
-        device = torch.device(args.device)
+    device_str = get_config('device', None)
+    if device_str:
+        device = torch.device(device_str)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # Eval only mode
+    eval_only = get_config('eval_only', False)
+    checkpoint_path = get_config('checkpoint', None)
 
     # Create dataloaders
     print("\nLoading data...")
@@ -108,11 +137,11 @@ def main():
     model = create_model(config)
     print(f"\nModel parameters: {model.count_parameters():,}")
 
-    if args.eval_only:
+    if eval_only:
         # Load checkpoint and evaluate
-        checkpoint_path = args.checkpoint or Path(config.checkpoint_dir) / "best_model.pt"
-        print(f"\nLoading checkpoint: {checkpoint_path}")
-        load_checkpoint(model, checkpoint_path, device)
+        ckpt_path = checkpoint_path or Path(config.checkpoint_dir) / "best_model.pt"
+        print(f"\nLoading checkpoint: {ckpt_path}")
+        load_checkpoint(model, ckpt_path, device)
 
         print("\nEvaluating on test set...")
         metrics = evaluate_model(

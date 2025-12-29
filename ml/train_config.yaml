@@ -1,0 +1,26 @@
+# Fire Simulation Surrogate Model Training Configuration
+# Usage: python -m ml.run_training --config ml/train_config.yaml
+
+# Data settings
+data_dir: "combined_fast"
+floor_plans_dir: "combined_fast/floor_plans"  # Optional, defaults to {data_dir}/floor_plans
+max_plans: null  # Set to integer to limit number of floor plans (e.g., 100 for quick test)
+
+# Training settings
+epochs: 100
+batch_size: 64
+lr: 0.001  # Learning rate
+weight_decay: 0.0001
+patience: 10  # Early stopping patience
+
+# Model settings
+dropout: 0.2
+
+# System settings
+num_workers: 4
+device: null  # null for auto-detect, or "cuda" / "cpu"
+checkpoint_dir: "checkpoints"
+
+# Evaluation settings
+eval_only: false  # Set to true to only evaluate existing checkpoint
+checkpoint: null  # Path to checkpoint for evaluation (optional)

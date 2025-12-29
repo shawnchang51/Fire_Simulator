@@ -222,6 +222,7 @@ def plot_latent_pca(
     plt.tight_layout()
 
     if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved PCA plot to {output_path}")
     else:
@@ -329,6 +330,7 @@ def plot_latent_metric_correlation(
     plt.tight_layout()
 
     if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved correlation heatmap to {output_path}")
     else:
@@ -406,6 +408,7 @@ def plot_perturbation_sensitivity(
     plt.tight_layout()
 
     if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved perturbation plot to {output_path}")
     else:
@@ -475,6 +478,7 @@ def plot_training_history(
     plt.tight_layout()
 
     if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved training history to {output_path}")
     else:
@@ -540,6 +544,7 @@ def visualize_gradcam_sample(
     plt.tight_layout()
 
     if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved Grad-CAM visualization to {output_path}")
     else:

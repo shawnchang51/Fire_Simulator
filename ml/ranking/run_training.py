@@ -456,8 +456,18 @@ def mode_train(args):
         # Set seed
         torch.manual_seed(args.seed)
 
-        # Create config from args (for overrides)
-        config = create_config_from_args(args)
+        # Load config from resume directory first
+        resume_config_file = resume_dir / "config.yaml"
+        if resume_config_file.exists():
+            print(f"Loading config from: {resume_config_file}")
+            # Temporarily set args.config to resume directory's config
+            original_config_arg = args.config
+            args.config = str(resume_config_file)
+            config = create_config_from_args(args)
+            args.config = original_config_arg  # Restore
+        else:
+            print("WARNING: No config.yaml found in resume directory, using CLI arguments")
+            config = create_config_from_args(args)
 
         # Set device
         if args.device:

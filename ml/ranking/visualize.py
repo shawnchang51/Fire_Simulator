@@ -143,7 +143,7 @@ def collect_latent_vectors(
     dataset,
     n_samples: int = 1000,
     device: torch.device = None
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Collect latent vectors and scores for analysis.
 
@@ -154,7 +154,7 @@ def collect_latent_vectors(
         device: Device to use
 
     Returns:
-        Tuple of (latent_vectors (N, K), scores (N,))
+        Tuple of (latent_vectors (N, K), gt_scores (N,), predicted_scores (N,))
     """
     if device is None:
         device = next(model.parameters()).device
@@ -162,7 +162,8 @@ def collect_latent_vectors(
     model.eval()
 
     latents = []
-    scores = []
+    gt_scores = []
+    pred_scores = []
 
     n_samples = min(n_samples, len(dataset))
 
@@ -170,17 +171,22 @@ def collect_latent_vectors(
         for i in range(n_samples):
             item = dataset[i]
             grid = item['grid'].unsqueeze(0).to(device)
+            scenario = item['scenario'].unsqueeze(0).to(device)
 
             latent = model.get_latent(grid)
+            score = model.score_config(grid, scenario)
+            
             latents.append(latent.cpu().numpy().squeeze())
-            scores.append(item['ground_truth_score'])
+            gt_scores.append(item['ground_truth_score'])
+            pred_scores.append(score.cpu().item())
 
-    return np.stack(latents), np.array(scores)
+    return np.stack(latents), np.array(gt_scores), np.array(pred_scores)
 
 
 def plot_latent_pca(
     latents: np.ndarray,
     scores: np.ndarray,
+    predicted_scores: Optional[np.ndarray] = None,
     output_path: Optional[str] = None
 ):
     """
@@ -189,6 +195,7 @@ def plot_latent_pca(
     Args:
         latents: Latent vectors of shape (N, K)
         scores: Ground truth scores of shape (N,)
+        predicted_scores: Optional predicted scores for comparison
         output_path: Optional path to save figure
     """
     try:
@@ -202,22 +209,46 @@ def plot_latent_pca(
     pca = PCA(n_components=2)
     latents_2d = pca.fit_transform(latents)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 8))
+    # Create figure with 1 or 2 subplots
+    n_plots = 2 if predicted_scores is not None else 1
+    fig, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 5))
+    if n_plots == 1:
+        axes = [axes]
 
+    # Plot 1: Colored by ground truth score
+    ax = axes[0]
     scatter = ax.scatter(
         latents_2d[:, 0],
         latents_2d[:, 1],
         c=scores,
-        cmap='viridis',
-        alpha=0.6,
-        s=20
+        cmap='RdYlGn',  # Red=bad, Yellow=mid, Green=good
+        alpha=0.7,
+        s=25,
+        edgecolors='none'
     )
+    plt.colorbar(scatter, ax=ax, label='Ground Truth Score')
+    ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
+    ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
+    ax.set_title('Latent Space (Ground Truth)')
+    ax.grid(True, alpha=0.3)
 
-    plt.colorbar(scatter, label='Ground Truth Score')
-    ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance)')
-    ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance)')
-    ax.set_title('Latent Space PCA (colored by evacuation quality score)')
+    # Plot 2: Colored by predicted score (if available)
+    if predicted_scores is not None:
+        ax = axes[1]
+        scatter = ax.scatter(
+            latents_2d[:, 0],
+            latents_2d[:, 1],
+            c=predicted_scores,
+            cmap='RdYlGn',
+            alpha=0.7,
+            s=25,
+            edgecolors='none'
+        )
+        plt.colorbar(scatter, ax=ax, label='Predicted Score')
+        ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
+        ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
+        ax.set_title('Latent Space (Predicted)')
+        ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
@@ -245,6 +276,8 @@ def plot_latent_metric_correlation(
     - survival_rate
     - steps (normalized)
     - avg_fire_damage
+    - ground_truth_score
+    - predicted_score
 
     Args:
         model: Trained ranking model
@@ -270,6 +303,8 @@ def plot_latent_metric_correlation(
     survival_rates = []
     steps_list = []
     fire_damages = []
+    gt_scores = []
+    pred_scores = []
 
     n_samples = min(n_samples, len(dataset))
 
@@ -277,56 +312,66 @@ def plot_latent_metric_correlation(
         for i in range(n_samples):
             item = dataset[i]
             grid = item['grid'].unsqueeze(0).to(device)
+            scenario = item['scenario'].unsqueeze(0).to(device)
 
             latent = model.get_latent(grid)
+            score = model.score_config(grid, scenario)
+            
             latents.append(latent.cpu().numpy().squeeze())
+            pred_scores.append(score.cpu().item())
 
-            # These fields need to be in the dataset
-            # For SingleConfigDataset, we need to add them
-            # For now, use ground_truth_score as proxy
+            # Get actual metrics from dataset
             survival_rates.append(item.get('survival_rate', item['ground_truth_score']))
-            steps_list.append(item.get('steps', 50))  # Default placeholder
+            steps_list.append(item.get('steps', 50))
             fire_damages.append(item.get('avg_fire_damage', 0.5))
+            gt_scores.append(item['ground_truth_score'])
 
     latents = np.stack(latents)  # (N, K)
     survival_rates = np.array(survival_rates)
     steps = np.array(steps_list)
     fire_damages = np.array(fire_damages)
+    gt_scores = np.array(gt_scores)
+    pred_scores = np.array(pred_scores)
 
     # Compute correlations
     K = latents.shape[1]
-    metrics = ['survival_rate', 'steps', 'fire_damage']
-    metric_values = [survival_rates, steps, fire_damages]
+    metrics = ['Survival\nRate', 'Steps', 'Fire\nDamage', 'GT\nScore', 'Predicted\nScore']
+    metric_values = [survival_rates, steps, fire_damages, gt_scores, pred_scores]
 
     correlations = np.zeros((K, len(metrics)))
 
     for i in range(K):
         for j, values in enumerate(metric_values):
-            rho, _ = spearmanr(latents[:, i], values)
-            correlations[i, j] = rho if not np.isnan(rho) else 0.0
+            # Check for constant values
+            if np.std(latents[:, i]) < 1e-8 or np.std(values) < 1e-8:
+                correlations[i, j] = 0.0
+            else:
+                rho, _ = spearmanr(latents[:, i], values)
+                correlations[i, j] = rho if not np.isnan(rho) else 0.0
 
     # Create heatmap
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(10, max(6, K * 0.6)))
 
     im = ax.imshow(correlations, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
 
     # Labels
     ax.set_xticks(range(len(metrics)))
-    ax.set_xticklabels(metrics)
+    ax.set_xticklabels(metrics, fontsize=10)
     ax.set_yticks(range(K))
-    ax.set_yticklabels([f'Latent {i}' for i in range(K)])
-    ax.set_xlabel('Metric')
-    ax.set_ylabel('Latent Dimension')
-    ax.set_title('Latent-Metric Correlation (Spearman)')
+    ax.set_yticklabels([f'Latent {i}' for i in range(K)], fontsize=10)
+    ax.set_xlabel('Metric', fontsize=11)
+    ax.set_ylabel('Latent Dimension', fontsize=11)
+    ax.set_title('Latent-Metric Correlation (Spearman ρ)', fontsize=12)
 
     # Add correlation values as text
     for i in range(K):
         for j in range(len(metrics)):
             color = 'white' if abs(correlations[i, j]) > 0.5 else 'black'
             ax.text(j, i, f'{correlations[i, j]:.2f}',
-                    ha='center', va='center', color=color, fontsize=9)
+                    ha='center', va='center', color=color, fontsize=9,
+                    fontweight='bold' if abs(correlations[i, j]) > 0.3 else 'normal')
 
-    plt.colorbar(im, label='Spearman Correlation')
+    plt.colorbar(im, ax=ax, label='Spearman Correlation', shrink=0.8)
     plt.tight_layout()
 
     if output_path:
@@ -586,9 +631,9 @@ def generate_all_visualizations(
 
     # Latent PCA
     try:
-        latents, scores = collect_latent_vectors(model, dataset, n_samples, device)
+        latents, gt_scores, pred_scores = collect_latent_vectors(model, dataset, n_samples, device)
         plot_latent_pca(
-            latents, scores,
+            latents, gt_scores, pred_scores,
             output_path=str(output_dir / "latent_pca.png")
         )
     except Exception as e:

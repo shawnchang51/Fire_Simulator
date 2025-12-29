@@ -428,6 +428,10 @@ class SingleConfigDataset(Dataset):
             'scenario': scenario,
             'floor_plan_id': record['floor_plan_id'],
             'ground_truth_score': ground_truth_score,
+            # Raw metrics for visualization
+            'survival_rate': record['survival_rate'],
+            'steps': record['steps'],
+            'avg_fire_damage': record['avg_fire_damage'],
         }
 
 

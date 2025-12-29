@@ -1,26 +1,73 @@
 # Fire Simulation Surrogate Model Training Configuration
 # Usage: python -m ml.run_training --config ml/train_config.yaml
 
-# Data settings
+# =============================================================================
+# Data Settings
+# =============================================================================
 data_dir: "combined_fast"
 floor_plans_dir: "combined_fast/floor_plans"  # Optional, defaults to {data_dir}/floor_plans
 max_plans: null  # Set to integer to limit number of floor plans (e.g., 100 for quick test)
 
-# Training settings
+# =============================================================================
+# Grid Processing
+# =============================================================================
+target_grid_size: [96, 128]  # [H, W] - covers max observed sizes
+num_grid_channels: 4  # wall, passable, doors, exits
+
+# =============================================================================
+# CNN Architecture
+# =============================================================================
+cnn_channels: [32, 64, 128, 256]  # Channel sizes for each conv layer
+cnn_kernel_size: 3  # Kernel size for conv layers
+
+# =============================================================================
+# Scenario MLP
+# =============================================================================
+scenario_input_dim: 4  # agent_count, num_fires, fire_spread_rate, fire_discovery_delay
+scenario_hidden_dims: [64, 32]  # Hidden layer dimensions for scenario encoder
+
+# =============================================================================
+# Combined Head (after CNN + Scenario fusion)
+# =============================================================================
+head_hidden_dims: [256, 128, 64]  # Hidden layer dimensions for prediction head
+dropout: 0.2  # Dropout rate
+
+# =============================================================================
+# Output Configuration
+# =============================================================================
+num_outputs: 4  # Number of output targets
+output_names:  # Names of output targets
+  - survival_rate
+  - avg_evacuation_time
+  - steps
+  - avg_fire_damage
+
+# =============================================================================
+# Training Hyperparameters
+# =============================================================================
 epochs: 100
 batch_size: 64
 lr: 0.001  # Learning rate
-weight_decay: 0.0001
+weight_decay: 0.0001  # Weight decay for AdamW optimizer
 patience: 10  # Early stopping patience
 
-# Model settings
-dropout: 0.2
-
-# System settings
-num_workers: 4
+# =============================================================================
+# System Settings
+# =============================================================================
+num_workers: 4  # DataLoader workers
 device: null  # null for auto-detect, or "cuda" / "cpu"
 checkpoint_dir: "checkpoints"
 
-# Evaluation settings
+# =============================================================================
+# Normalization Stats (optional, computed from training data if not provided)
+# =============================================================================
+# scenario_means: [100.0, 3.0, 0.5, 10.0]
+# scenario_stds: [50.0, 1.5, 0.2, 5.0]
+# target_means: [0.8, 50.0, 100.0, 0.3]
+# target_stds: [0.2, 20.0, 50.0, 0.2]
+
+# =============================================================================
+# Evaluation Settings
+# =============================================================================
 eval_only: false  # Set to true to only evaluate existing checkpoint
 checkpoint: null  # Path to checkpoint for evaluation (optional)

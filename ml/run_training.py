@@ -91,17 +91,49 @@ def main():
 
     # Create config
     config = ModelConfig(
+        # Data paths
         data_dir=get_config('data_dir', 'combined_fast'),
         floor_plans_dir=get_config('floor_plans_dir', f"{get_config('data_dir', 'combined_fast')}/floor_plans"),
-        epochs=get_config('epochs', 100),
+        
+        # Grid processing
+        target_grid_size=tuple(get_config('target_grid_size', [96, 128])),
+        num_grid_channels=get_config('num_grid_channels', 4),
+        
+        # CNN architecture
+        cnn_channels=get_config('cnn_channels', [32, 64, 128, 256]),
+        cnn_kernel_size=get_config('cnn_kernel_size', 3),
+        
+        # Scenario MLP
+        scenario_input_dim=get_config('scenario_input_dim', 4),
+        scenario_hidden_dims=get_config('scenario_hidden_dims', [64, 32]),
+        
+        # Combined head
+        head_hidden_dims=get_config('head_hidden_dims', [256, 128, 64]),
+        dropout=get_config('dropout', 0.2),
+        
+        # Output
+        num_outputs=get_config('num_outputs', 4),
+        output_names=get_config('output_names', ['survival_rate', 'avg_evacuation_time', 'steps', 'avg_fire_damage']),
+        
+        # Training
         batch_size=get_config('batch_size', 64),
         learning_rate=get_config('lr', 1e-3),
         weight_decay=get_config('weight_decay', 1e-4),
+        epochs=get_config('epochs', 100),
         early_stopping_patience=get_config('patience', 10),
-        dropout=get_config('dropout', 0.2),
         num_workers=get_config('num_workers', 4),
+        
+        # Data loading
+        max_plans=get_config('max_plans', None),
+        
+        # Normalization stats (optional)
+        scenario_means=get_config('scenario_means', None),
+        scenario_stds=get_config('scenario_stds', None),
+        target_means=get_config('target_means', None),
+        target_stds=get_config('target_stds', None),
+        
+        # Checkpointing
         checkpoint_dir=get_config('checkpoint_dir', 'checkpoints'),
-        max_plans=get_config('max_plans', None)
     )
 
     # Device

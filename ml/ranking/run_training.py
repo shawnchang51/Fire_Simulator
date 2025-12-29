@@ -11,6 +11,16 @@ Usage:
     # Train with YAML config + CLI overrides (CLI takes priority)
     python -m ml.ranking.run_training --mode train --config config.yaml --epochs 100 --learning-rate 0.0005
 
+    # Resume training from checkpoint directory
+    python -m ml.ranking.run_training --mode train --resume-from checkpoints/ranking
+
+    # Resume with hyperparameter changes
+    python -m ml.ranking.run_training --mode train --resume-from checkpoints/ranking \
+        --learning-rate 0.0005 --epochs 150 --warmup-epochs 10
+
+    # Resume in-place (overwrite original checkpoints)
+    python -m ml.ranking.run_training --mode train --resume-from checkpoints/ranking --resume-in-place
+
     # Evaluate on test set
     python -m ml.ranking.run_training --mode eval --checkpoint checkpoints/ranking/best_model.pt
 
@@ -65,6 +75,8 @@ from typing import Any, Dict, Optional
 import torch
 import yaml
 
+from datetime import datetime
+
 from .config import RankingConfig
 from .dataset import (
     create_pairwise_dataloaders,
@@ -72,7 +84,7 @@ from .dataset import (
     compute_scenario_stats
 )
 from .model import SiameseRanker
-from .train import train_ranking_model, load_checkpoint
+from .train import train_ranking_model, load_checkpoint, load_resume_checkpoint
 from .evaluate import evaluate_pairwise, evaluate_per_plan_ranking, print_evaluation_report
 from .visualize import generate_all_visualizations, plot_training_history
 
@@ -196,6 +208,19 @@ def parse_args():
         type=str,
         default='checkpoints/ranking',
         help="Directory for saving checkpoints"
+    )
+
+    # Resume training arguments
+    parser.add_argument(
+        '--resume-from',
+        type=str,
+        default=None,
+        help="Resume training from checkpoint directory. Loads model, optimizer, and training history."
+    )
+    parser.add_argument(
+        '--resume-in-place',
+        action='store_true',
+        help="Save resumed checkpoints to same directory (default: create new timestamped directory)"
     )
 
     # Output arguments
@@ -418,58 +443,150 @@ def create_config_from_args(args) -> RankingConfig:
 def mode_train(args):
     """Training mode."""
     print("=" * 60)
-    print("PAIRWISE RANKING MODEL - TRAINING")
-    print("=" * 60)
 
-    # Set seed
-    torch.manual_seed(args.seed)
+    # Check if resuming
+    is_resuming = args.resume_from is not None
 
-    # Create config
-    config = create_config_from_args(args)
+    if is_resuming:
+        print("PAIRWISE RANKING MODEL - RESUME TRAINING")
+        print("=" * 60)
 
-    # Set device
-    if args.device:
-        device = torch.device(args.device)
+        resume_dir = Path(args.resume_from)
+
+        # Set seed
+        torch.manual_seed(args.seed)
+
+        # Create config from args (for overrides)
+        config = create_config_from_args(args)
+
+        # Set device
+        if args.device:
+            device = torch.device(args.device)
+        else:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Load resume checkpoint
+        model, optimizer, history, start_epoch, best_val_auc, scenario_stats = \
+            load_resume_checkpoint(str(resume_dir), config, device)
+
+        # Determine checkpoint directory
+        if args.resume_in_place:
+            config.checkpoint_dir = str(resume_dir)
+            config.log_dir = str(resume_dir.parent / "logs" / resume_dir.name)
+            print(f"\nSaving to same directory (in-place): {config.checkpoint_dir}")
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_dir_name = f"{resume_dir.name}_resumed_{timestamp}"
+            config.checkpoint_dir = str(resume_dir.parent / new_dir_name)
+            config.log_dir = str(resume_dir.parent / "logs" / new_dir_name)
+            print(f"\nSaving to new directory: {config.checkpoint_dir}")
+
+        # Print config
+        print(f"\nConfiguration:")
+        print(f"  Resuming from epoch: {start_epoch}")
+        print(f"  Previous best AUC: {best_val_auc:.4f}")
+        print(f"  Total epochs: {config.epochs}")
+        print(f"  Learning rate: {config.learning_rate}")
+        print(f"  Batch size: {config.batch_size}")
+        print(f"  Device: {device}")
+        print()
+
+        # Create dataloaders with loaded scenario stats
+        print("Loading data with original normalization stats...")
+        config.scenario_means = scenario_stats['means']
+        config.scenario_stds = scenario_stats['stds']
+        train_loader, val_loader, test_loader, _ = create_pairwise_dataloaders(
+            config, compute_stats=False
+        )
+        print(f"  Train pairs: {len(train_loader.dataset):,}")
+        print(f"  Val pairs: {len(val_loader.dataset):,}")
+        print(f"  Test pairs: {len(test_loader.dataset):,}")
+
+        # Prepare resume checkpoint dict
+        resume_checkpoint = {
+            'model': model,
+            'optimizer': optimizer,
+            'history': history,
+            'start_epoch': start_epoch,
+            'best_val_auc': best_val_auc
+        }
+
+        # Continue training
+        model, history = train_ranking_model(
+            config, train_loader, val_loader, device,
+            resume_checkpoint=resume_checkpoint
+        )
+
+        # Save final config
+        config_output_path = Path(config.checkpoint_dir) / "config.yaml"
+        save_config_to_yaml(config, str(config_output_path),
+                           extra_params={'device': str(device),
+                                       'resumed_from': str(resume_dir)})
+        print(f"Saved config to {config_output_path}")
+
+        # Save scenario stats to new directory
+        stats_path = Path(config.checkpoint_dir) / "scenario_stats.json"
+        with open(stats_path, 'w') as f:
+            json.dump({'scenario_stats': scenario_stats}, f, indent=2)
+        print(f"Saved scenario stats to {stats_path}")
+
+        print("\nSkipping test evaluation (resume mode).")
+        print("Run with --mode eval to evaluate on test set when training is complete.")
+
     else:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Fresh training
+        print("PAIRWISE RANKING MODEL - TRAINING")
+        print("=" * 60)
 
-    print(f"\nConfiguration:")
-    print(f"  Data dir: {config.data_dir}")
-    print(f"  Latent dim: {config.latent_dim}")
-    print(f"  Loss type: {config.loss_type}")
-    print(f"  Batch size: {config.batch_size}")
-    print(f"  Learning rate: {config.learning_rate}")
-    print(f"  Augment shift: {config.augment_shift}")
-    print(f"  Device: {device}")
-    print()
+        # Set seed
+        torch.manual_seed(args.seed)
 
-    # Create dataloaders
-    print("Loading data...")
-    train_loader, val_loader, test_loader, stats = create_pairwise_dataloaders(config)
-    print(f"  Train pairs: {len(train_loader.dataset):,}")
-    print(f"  Val pairs: {len(val_loader.dataset):,}")
-    print(f"  Test pairs: {len(test_loader.dataset):,}")
+        # Create config
+        config = create_config_from_args(args)
 
-    # Train model
-    model, history = train_ranking_model(
-        config, train_loader, val_loader, device
-    )
+        # Set device
+        if args.device:
+            device = torch.device(args.device)
+        else:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Save config for reproducibility
-    config_output_path = Path(config.checkpoint_dir) / "config.yaml"
-    save_config_to_yaml(config, str(config_output_path), extra_params={'device': str(device)})
-    print(f"Saved config to {config_output_path}")
+        print(f"\nConfiguration:")
+        print(f"  Data dir: {config.data_dir}")
+        print(f"  Latent dim: {config.latent_dim}")
+        print(f"  Loss type: {config.loss_type}")
+        print(f"  Batch size: {config.batch_size}")
+        print(f"  Learning rate: {config.learning_rate}")
+        print(f"  Augment shift: {config.augment_shift}")
+        print(f"  Device: {device}")
+        print()
 
-    # Evaluate on test set
-    print("\nEvaluating on test set...")
-    pairwise_metrics = evaluate_pairwise(model, test_loader, device)
-    print_evaluation_report(pairwise_metrics)
+        # Create dataloaders
+        print("Loading data...")
+        train_loader, val_loader, test_loader, stats = create_pairwise_dataloaders(config)
+        print(f"  Train pairs: {len(train_loader.dataset):,}")
+        print(f"  Val pairs: {len(val_loader.dataset):,}")
+        print(f"  Test pairs: {len(test_loader.dataset):,}")
 
-    # Save stats
-    stats_path = Path(config.checkpoint_dir) / "scenario_stats.json"
-    with open(stats_path, 'w') as f:
-        json.dump(stats, f, indent=2)
-    print(f"Saved scenario stats to {stats_path}")
+        # Train model
+        model, history = train_ranking_model(
+            config, train_loader, val_loader, device
+        )
+
+        # Save config for reproducibility
+        config_output_path = Path(config.checkpoint_dir) / "config.yaml"
+        save_config_to_yaml(config, str(config_output_path), extra_params={'device': str(device)})
+        print(f"Saved config to {config_output_path}")
+
+        # Evaluate on test set
+        print("\nEvaluating on test set...")
+        pairwise_metrics = evaluate_pairwise(model, test_loader, device)
+        print_evaluation_report(pairwise_metrics)
+
+        # Save stats
+        stats_path = Path(config.checkpoint_dir) / "scenario_stats.json"
+        with open(stats_path, 'w') as f:
+            json.dump(stats, f, indent=2)
+        print(f"Saved scenario stats to {stats_path}")
 
     print("\nTraining complete!")
 

@@ -57,7 +57,7 @@ learning_rate: 0.001    # Initial learning rate
 warmup_epochs: 5        # Number of warmup epochs
 epochs: 100             # Maximum training epochs
 early_stopping_patience: 15  # Patience for early stopping
-num_workers:           # Number of data loading workers
+num_workers: 12          # Number of data loading workers
 
 # ===================
 # Checkpoint and Logging

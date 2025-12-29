@@ -598,13 +598,187 @@ def visualize_gradcam_sample(
     plt.close()
 
 
+def visualize_multiple_gradcam(
+    model: SiameseRanker,
+    dataset,
+    plan_indices: List[int],
+    output_path: Optional[str] = None,
+    device: torch.device = None,
+    cols: int = 3,
+    save_individual: bool = False,
+    output_dir: Optional[str] = None
+):
+    """
+    Generate Grad-CAM visualization for multiple plans.
+
+    Args:
+        model: Trained ranking model
+        dataset: Dataset containing samples
+        plan_indices: List of plan indices to visualize (e.g., [0, 5, 10, 15])
+        output_path: Optional path to save combined figure (ignored if save_individual=True)
+        device: Device to use
+        cols: Number of columns in the grid layout (for combined figure)
+        save_individual: If True, save each plan as a separate image file
+        output_dir: Directory for individual images (required if save_individual=True)
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib required for visualization")
+        return
+
+    if device is None:
+        device = next(model.parameters()).device
+
+    # Validate indices
+    valid_indices = [i for i in plan_indices if 0 <= i < len(dataset)]
+    if len(valid_indices) != len(plan_indices):
+        invalid = set(plan_indices) - set(valid_indices)
+        print(f"Warning: Invalid indices ignored: {invalid}")
+    
+    if not valid_indices:
+        print("No valid plan indices provided!")
+        return
+
+    gradcam = GradCAM(model)
+
+    # === Save as individual images ===
+    if save_individual:
+        if output_dir is None:
+            output_dir = "gradcam_outputs"
+        
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for plan_idx in valid_indices:
+            sample = dataset[plan_idx]
+            grid = sample['grid'].to(device)
+            scenario = sample['scenario'].to(device)
+
+            # Generate Grad-CAM
+            cam = gradcam.generate(grid, scenario)
+
+            # Get score
+            with torch.no_grad():
+                score = model.score_single(
+                    grid.unsqueeze(0) if grid.dim() == 3 else grid,
+                    scenario.unsqueeze(0) if scenario.dim() == 1 else scenario
+                ).item()
+
+            # Floor plan
+            floor_plan = grid[1].cpu().numpy()
+
+            # Create individual figure
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+            # Floor plan
+            axes[0].imshow(floor_plan, cmap='gray')
+            axes[0].set_title(f'Floor Plan', fontsize=12)
+            axes[0].axis('off')
+
+            # Grad-CAM heatmap
+            axes[1].imshow(cam, cmap='jet')
+            axes[1].set_title('Grad-CAM Attention', fontsize=12)
+            axes[1].axis('off')
+
+            # Overlay
+            axes[2].imshow(floor_plan, cmap='gray')
+            axes[2].imshow(cam, cmap='jet', alpha=0.5)
+            axes[2].set_title('Overlay', fontsize=12)
+            axes[2].axis('off')
+
+            plt.suptitle(f'Plan {plan_idx} | Score: {score:.4f}', fontsize=14)
+            plt.tight_layout()
+
+            # Save individual file
+            individual_path = output_dir / f"gradcam_plan_{plan_idx:05d}.png"
+            plt.savefig(individual_path, dpi=150, bbox_inches='tight')
+            plt.close()
+
+        print(f"Saved {len(valid_indices)} individual Grad-CAM images to {output_dir}/")
+        return
+
+    # === Save as combined grid image ===
+    n_plans = len(valid_indices)
+    rows = (n_plans + cols - 1) // cols  # Ceiling division
+
+    # Each plan gets 3 columns: floor plan, heatmap, overlay
+    fig, axes = plt.subplots(rows, cols * 3, figsize=(5 * cols * 3, 5 * rows))
+    
+    # Handle single row case
+    if rows == 1:
+        axes = axes.reshape(1, -1)
+
+    gradcam = GradCAM(model)
+
+    for idx, plan_idx in enumerate(valid_indices):
+        row = idx // cols
+        col_base = (idx % cols) * 3
+
+        sample = dataset[plan_idx]
+        grid = sample['grid'].to(device)
+        scenario = sample['scenario'].to(device)
+
+        # Generate Grad-CAM
+        cam = gradcam.generate(grid, scenario)
+
+        # Get score
+        with torch.no_grad():
+            score = model.score_single(
+                grid.unsqueeze(0) if grid.dim() == 3 else grid,
+                scenario.unsqueeze(0) if scenario.dim() == 1 else scenario
+            ).item()
+
+        # Floor plan
+        floor_plan = grid[1].cpu().numpy()  # Passable channel
+        
+        ax = axes[row, col_base]
+        ax.imshow(floor_plan, cmap='gray')
+        ax.set_title(f'Plan {plan_idx}\nScore: {score:.3f}', fontsize=10)
+        ax.axis('off')
+
+        # Grad-CAM heatmap
+        ax = axes[row, col_base + 1]
+        ax.imshow(cam, cmap='jet')
+        ax.set_title('Grad-CAM', fontsize=10)
+        ax.axis('off')
+
+        # Overlay
+        ax = axes[row, col_base + 2]
+        ax.imshow(floor_plan, cmap='gray')
+        ax.imshow(cam, cmap='jet', alpha=0.5)
+        ax.set_title('Overlay', fontsize=10)
+        ax.axis('off')
+
+    # Hide unused axes
+    total_slots = rows * cols
+    for idx in range(n_plans, total_slots):
+        row = idx // cols
+        col_base = (idx % cols) * 3
+        for offset in range(3):
+            axes[row, col_base + offset].axis('off')
+
+    plt.suptitle(f'Grad-CAM Visualization for {n_plans} Plans', fontsize=14)
+    plt.tight_layout()
+
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Saved multi-plan Grad-CAM to {output_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+
 def generate_all_visualizations(
     model: SiameseRanker,
     dataset,
     history: Dict,
     output_dir: str,
     n_samples: int = 500,
-    device: torch.device = None
+    device: torch.device = None,
+    gradcam_indices: Optional[List[int]] = None
 ):
     """
     Generate all visualizations and save to output directory.
@@ -616,6 +790,9 @@ def generate_all_visualizations(
         output_dir: Directory to save visualizations
         n_samples: Number of samples for latent analysis
         device: Device to use
+        gradcam_indices: Optional list of plan indices for Grad-CAM.
+                        If None, uses first sample only.
+                        Example: [0, 10, 20, 50] for 4 specific plans
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -649,14 +826,24 @@ def generate_all_visualizations(
     except Exception as e:
         print(f"Failed to generate correlation heatmap: {e}")
 
-    # Grad-CAM for first sample
+    # Grad-CAM visualization
     try:
-        sample = dataset[0]
-        visualize_gradcam_sample(
-            model, sample,
-            output_path=str(output_dir / "gradcam_sample.png"),
-            device=device
-        )
+        if gradcam_indices is not None and len(gradcam_indices) > 1:
+            # Multiple plans
+            visualize_multiple_gradcam(
+                model, dataset, gradcam_indices,
+                output_path=str(output_dir / "gradcam_multiple.png"),
+                device=device
+            )
+        else:
+            # Single plan (default: first sample, or first in gradcam_indices)
+            sample_idx = gradcam_indices[0] if gradcam_indices else 0
+            sample = dataset[sample_idx]
+            visualize_gradcam_sample(
+                model, sample,
+                output_path=str(output_dir / f"gradcam_sample_{sample_idx}.png"),
+                device=device
+            )
     except Exception as e:
         print(f"Failed to generate Grad-CAM: {e}")
 

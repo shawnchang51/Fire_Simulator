@@ -465,18 +465,21 @@ def create_config_from_args(args) -> RankingConfig:
         ('num_workers', 'num_workers'),
     ]
     
+    has_preset = preset is not None
+
     for cli_arg, config_key in cli_to_config:
         cli_value = getattr(args, cli_arg, None)
         default_value = parser_defaults.get(cli_arg)
-        
-        # Override if CLI value is different from default (user explicitly set it)
-        # or if no YAML config was provided
+
         if cli_value is not None:
-            if not args.config or cli_value != default_value:
-                # User explicitly set CLI value or no YAML config
+            # Only override if user explicitly set CLI value (different from default)
+            if cli_value != default_value:
                 config_kwargs[config_key] = cli_value
-            elif config_key not in config_kwargs:
-                # YAML config provided but doesn't have this key - use CLI default
+            # If no preset and no YAML, use CLI defaults
+            elif not has_preset and not args.config:
+                config_kwargs[config_key] = cli_value
+            # If YAML provided but key missing, use CLI default (but not for preset)
+            elif args.config and config_key not in config_kwargs:
                 config_kwargs[config_key] = cli_value
     
     # Ensure num_workers is always set (fallback to default if still None)

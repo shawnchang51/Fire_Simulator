@@ -2,10 +2,17 @@
 Main entry point for training the Fire Simulation Surrogate Model
 
 Usage:
-    python -m ml.run_training
-    python -m ml.run_training --epochs 50 --batch_size 128
-    python -m ml.run_training --max_plans 100  # Quick test with subset
-    python -m ml.run_training --config config.yaml  # Load from YAML config
+    python -m ml.surrogate.run_training
+    python -m ml.surrogate.run_training --epochs 50 --batch_size 128
+    python -m ml.surrogate.run_training --max_plans 100  # Quick test with subset
+    python -m ml.surrogate.run_training --config config.yaml  # Load from YAML config
+
+Visualization:
+    python -m ml.surrogate.run_training --visualize
+    python -m ml.surrogate.run_training --visualize --viz_samples 0,5,10
+    python -m ml.surrogate.run_training --visualize --viz_samples random:5
+    python -m ml.surrogate.run_training --visualize --viz_type gradcam
+    python -m ml.surrogate.run_training --visualize --viz_output ./my_viz/
 """
 
 import argparse
@@ -20,6 +27,22 @@ from .dataset import create_dataloaders
 from .model import create_model
 from .train import train_model, load_checkpoint
 from .evaluate import evaluate_model, print_evaluation_report
+
+
+def parse_sample_indices(viz_samples: str, dataset_size: int) -> list:
+    """Parse visualization sample indices from string.
+
+    Supports:
+        - Comma-separated: "0,1,2,5,10"
+        - Random: "random:5"
+    """
+    import random
+
+    if viz_samples.startswith("random:"):
+        n = int(viz_samples.split(":")[1])
+        return random.sample(range(dataset_size), min(n, dataset_size))
+    else:
+        return [int(x.strip()) for x in viz_samples.split(",")]
 
 
 def load_yaml_config(config_path: str) -> dict:
@@ -70,6 +93,17 @@ def parse_args():
                         help="Only evaluate existing checkpoint")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to checkpoint for evaluation")
+
+    # Visualization
+    parser.add_argument("--visualize", action="store_true",
+                        help="Generate visualizations (GradCAM and Counterfactual)")
+    parser.add_argument("--viz_samples", type=str, default="0,1,2",
+                        help="Sample indices to visualize (comma-separated, or 'random:N')")
+    parser.add_argument("--viz_type", type=str, default="all",
+                        choices=["gradcam", "counterfactual", "all"],
+                        help="Type of visualization to generate")
+    parser.add_argument("--viz_output", type=str, default=None,
+                        help="Output directory for visualizations (default: checkpoint_dir/visualizations)")
 
     return parser.parse_args()
 
@@ -148,6 +182,12 @@ def main():
     eval_only = get_config('eval_only', False)
     checkpoint_path = get_config('checkpoint', None)
 
+    # Visualization mode
+    visualize_mode = get_config('visualize', False)
+    viz_samples = get_config('viz_samples', '0,1,2')
+    viz_type = get_config('viz_type', 'all')
+    viz_output = get_config('viz_output', None)
+
     # Create dataloaders
     print("\nLoading data...")
     train_loader, val_loader, test_loader, stats = create_dataloaders(config)
@@ -169,7 +209,53 @@ def main():
     model = create_model(config)
     print(f"\nModel parameters: {model.count_parameters():,}")
 
-    if eval_only:
+    if visualize_mode:
+        # Visualization mode
+        from .visualize import visualize_sample, generate_visualizations
+
+        ckpt_path = checkpoint_path or Path(config.checkpoint_dir) / "best_model.pt"
+        print(f"\nLoading checkpoint: {ckpt_path}")
+        load_checkpoint(model, ckpt_path, device)
+        model.to(device)
+
+        # Parse sample indices
+        dataset = test_loader.dataset
+        sample_indices = parse_sample_indices(viz_samples, len(dataset))
+        print(f"Visualizing samples: {sample_indices}")
+
+        # Set output directory
+        output_dir = viz_output or str(Path(config.checkpoint_dir) / "visualizations")
+        print(f"Output directory: {output_dir}")
+
+        # Generate visualizations
+        compute_cf = viz_type in ['counterfactual', 'all']
+
+        if len(sample_indices) == 1:
+            # Single sample
+            sample = dataset[sample_indices[0]]
+            sample_output_dir = str(Path(output_dir) / f"sample_{sample_indices[0]:04d}")
+            visualize_sample(
+                model=model,
+                grid=sample['grid'],
+                scenario=sample['scenario'],
+                output_dir=sample_output_dir,
+                sample_name=f"sample_{sample_indices[0]:04d}",
+                compute_counterfactual=compute_cf,
+                device=device,
+                show_progress=True
+            )
+        else:
+            # Multiple samples
+            generate_visualizations(
+                model=model,
+                dataset=dataset,
+                sample_indices=sample_indices,
+                output_dir=output_dir,
+                compute_counterfactual=compute_cf,
+                device=device
+            )
+
+    elif eval_only:
         # Load checkpoint and evaluate
         ckpt_path = checkpoint_path or Path(config.checkpoint_dir) / "best_model.pt"
         print(f"\nLoading checkpoint: {ckpt_path}")

@@ -596,9 +596,25 @@ def main():
     # Print report
     print_ranking_report(all_metrics)
 
+    # Convert numpy types to Python native types for JSON serialization
+    def convert_to_native(obj):
+        """Recursively convert numpy types to Python native types."""
+        if isinstance(obj, dict):
+            return {k: convert_to_native(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_native(v) for v in obj]
+        elif isinstance(obj, (np.integer, np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+
     # Save metrics
     with open(args.output, 'w') as f:
-        json.dump(all_metrics, f, indent=2)
+        json.dump(convert_to_native(all_metrics), f, indent=2)
     logger.info(f"Metrics saved to {args.output}")
 
     # Additional analysis: show score distribution comparison

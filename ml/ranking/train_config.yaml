@@ -39,8 +39,8 @@ dropout: 0.2
 # ===================
 # Loss Function
 # ===================
-loss_type: ranknet  # 'ranknet' or 'hinge'
-margin: 0.1         # Margin for hinge loss
+loss_type: hinge    # 'ranknet' or 'hinge'
+margin: 1.0         # Margin for hinge loss
 sigma: 1.0          # Scaling factor for RankNet logistic
 
 # ===================

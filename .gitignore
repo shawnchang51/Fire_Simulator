@@ -28,3 +28,7 @@ env/
 ENV/
 venv-*/
 pip-wheel-metadata/
+
+# Data files (keep locally, not in git)
+combined_fast.zip
+*.jsonl

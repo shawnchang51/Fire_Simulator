@@ -489,8 +489,8 @@ def main():
                         help='Top-K for per-plan evaluation')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Device to run on')
-    parser.add_argument('--output', type=str, default='surrogate_ranking_metrics.json',
-                        help='Output file for metrics')
+    parser.add_argument('--output', type=str, default=None,
+                        help='Output file for metrics (default: save to checkpoint directory)')
 
     args = parser.parse_args()
 
@@ -498,6 +498,13 @@ def main():
     device = torch.device(args.device)
     data_dir = Path(args.data_dir)
     floor_plans_dir = args.floor_plans_dir or str(data_dir / 'floor_plans')
+
+    # Set output path: if not specified, save to checkpoint directory
+    if args.output is None:
+        checkpoint_dir = Path(args.checkpoint).parent
+        output_path = checkpoint_dir / 'surrogate_ranking_metrics.json'
+    else:
+        output_path = Path(args.output)
 
     # Load model
     model, config, checkpoint = load_model_and_config(args.checkpoint)
@@ -613,9 +620,9 @@ def main():
             return obj
 
     # Save metrics
-    with open(args.output, 'w') as f:
+    with open(output_path, 'w') as f:
         json.dump(convert_to_native(all_metrics), f, indent=2)
-    logger.info(f"Metrics saved to {args.output}")
+    logger.info(f"Metrics saved to {output_path}")
 
     # Additional analysis: show score distribution comparison
     print("\n SCORE DISTRIBUTION:")

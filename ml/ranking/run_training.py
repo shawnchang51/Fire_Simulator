@@ -254,8 +254,8 @@ def parse_args():
     parser.add_argument(
         '--num-workers',
         type=int,
-        default=4,
-        help="Number of data loading workers (default: 4)"
+        default=16,
+        help="Number of data loading workers (default: 16)"
     )
     parser.add_argument(
         '--device',
@@ -442,7 +442,7 @@ def create_config_from_args(args) -> RankingConfig:
         'weight_decay': 1e-4,
         'checkpoint_dir': 'checkpoints/ranking',
         'seed': 42,
-        'num_workers': 4,
+        'num_workers': 16,
     }
     
     # Map CLI args to config kwargs (override if not default)
@@ -484,7 +484,7 @@ def create_config_from_args(args) -> RankingConfig:
     
     # Ensure num_workers is always set (fallback to default if still None)
     if config_kwargs.get('num_workers') is None:
-        config_kwargs['num_workers'] = 4
+        config_kwargs['num_workers'] = 16
     
     return RankingConfig(**config_kwargs)
 

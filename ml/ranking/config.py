@@ -78,7 +78,7 @@ class RankingConfig:
     warmup_epochs: int = 5
     epochs: int = 100
     early_stopping_patience: int = 15
-    num_workers: int = 4
+    num_workers: int = 16
 
     # Checkpoint and logging
     checkpoint_dir: str = "checkpoints/ranking"

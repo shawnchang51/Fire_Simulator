@@ -71,7 +71,7 @@ def train_epoch(
     device: torch.device
 ) -> Dict[str, float]:
     """
-    Train for one epoch.
+    Train for one epoch with optional gradient accumulation.
 
     Args:
         model: The ranking model
@@ -94,8 +94,13 @@ def train_epoch(
     correct = 0
     total = 0
 
+    # Gradient accumulation settings
+    accumulation_steps = getattr(config, 'gradient_accumulation_steps', 1)
+
     pbar = tqdm(train_loader, desc="Training", leave=False)
-    for batch in pbar:
+    optimizer.zero_grad()  # Zero gradients at start
+
+    for batch_idx, batch in enumerate(pbar):
         # Move to device
         grid_a = batch['grid_a'].to(device)
         scenario_a = batch['scenario_a'].to(device)
@@ -120,19 +125,23 @@ def train_epoch(
         latent_a = model.get_latent(grid_a)
         l1_loss = config.l1_lambda * latent_a.abs().mean()
 
-        # Total loss
-        loss = pair_loss + l1_loss
+        # Total loss (scaled for gradient accumulation)
+        loss = (pair_loss + l1_loss) / accumulation_steps
 
-        # Backward pass
-        optimizer.zero_grad()
+        # Backward pass (accumulate gradients)
         loss.backward()
-        optimizer.step()
 
-        if scheduler is not None:
-            scheduler.step()
+        # Step optimizer every accumulation_steps batches
+        if (batch_idx + 1) % accumulation_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
-        # Track metrics
-        total_loss += loss.item()
+            if scheduler is not None:
+                scheduler.step()
+
+        # Track metrics (unscaled loss for reporting)
+        unscaled_loss = pair_loss.item() + l1_loss.item()
+        total_loss += unscaled_loss
         total_pair_loss += pair_loss.item()
         total_l1_loss += l1_loss.item()
         num_batches += 1
@@ -144,9 +153,14 @@ def train_epoch(
 
         # Update progress bar
         pbar.set_postfix({
-            'loss': f'{loss.item():.4f}',
+            'loss': f'{unscaled_loss:.4f}',
             'acc': f'{correct/total:.4f}'
         })
+
+    # Handle remaining gradients if batches not divisible by accumulation_steps
+    if len(train_loader) % accumulation_steps != 0:
+        optimizer.step()
+        optimizer.zero_grad()
 
     return {
         'train_loss': total_loss / num_batches,
@@ -319,7 +333,8 @@ def train_ranking_model(
 
     # Create loss function
     if config.loss_type == 'ranknet':
-        criterion = RankNetLoss(sigma=config.sigma)
+        label_smoothing = getattr(config, 'label_smoothing', 0.0)
+        criterion = RankNetLoss(sigma=config.sigma, label_smoothing=label_smoothing)
     else:
         criterion = MarginHingeLoss(margin=config.margin)
 
@@ -440,14 +455,16 @@ def validate_resume_config(
     IMMUTABLE_PARAMS = {
         'target_grid_size', 'num_grid_channels', 'cnn_channels',
         'latent_dim', 'scenario_input_dim', 'scenario_hidden_dim',
-        'scenario_output_dim', 'scoring_hidden_dim', 'dropout'
+        'scenario_output_dim', 'scoring_hidden_dim', 'dropout',
+        'use_residual', 'scoring_num_layers', 'use_layer_norm'  # New architecture params
     }
 
     # Define mutable parameters that can be changed
     MUTABLE_PARAMS = {
         'loss_type', 'margin', 'sigma', 'l1_lambda', 'weight_decay',
-        'batch_size', 'learning_rate', 'warmup_epochs', 'epochs',
-        'early_stopping_patience', 'num_workers', 'augment_shift', 'seed'
+        'batch_size', 'gradient_accumulation_steps', 'learning_rate',
+        'warmup_epochs', 'epochs', 'early_stopping_patience',
+        'num_workers', 'augment_shift', 'seed', 'label_smoothing'
     }
 
     # Define parameters that require warnings

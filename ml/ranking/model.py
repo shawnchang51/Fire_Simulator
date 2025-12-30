@@ -18,75 +18,149 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .config import RankingConfig
 
 
+class ResidualBlock(nn.Module):
+    """
+    Residual block with optional downsampling.
+
+    Uses standard pattern: Conv -> BN -> ReLU -> Conv -> BN + skip connection -> ReLU
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, downsample: bool = False):
+        super().__init__()
+        stride = 2 if downsample else 1
+
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3,
+                               stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3,
+                               stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        # Skip connection with optional projection
+        if in_channels != out_channels or downsample:
+            self.skip = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1,
+                         stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            self.skip = nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.skip(x)
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = F.relu(out, inplace=True)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        out += identity
+        out = F.relu(out, inplace=True)
+        return out
+
+
 class FloorPlanEncoder(nn.Module):
     """
-    CNN encoder for floor plan grids.
+    CNN encoder for floor plan grids with optional residual connections.
 
     Input: (B, 5, 96, 128) - 5 channels (wall, passable, doors, exits, valid_mask)
     Output: (B, latent_dim) - K-dimensional latent vector
 
     Architecture:
-        Conv layers with BN, ReLU, MaxPool → AdaptiveAvgPool → Linear projection
+        - If use_residual: Stem conv + ResidualBlocks with downsampling → AdaptiveAvgPool → Linear
+        - Otherwise: Conv layers with BN, ReLU, MaxPool → AdaptiveAvgPool → Linear projection
 
     Attributes:
         final_conv: Named reference to last conv layer for Grad-CAM
         latent_dim: Dimension of output latent vector
+        use_residual: Whether residual connections are enabled
     """
 
     def __init__(self, config: RankingConfig):
         super().__init__()
 
-        channels = config.cnn_channels  # Default: [16, 32, 64]
-        in_ch = config.num_grid_channels  # 4
+        channels = config.cnn_channels  # Default: [32, 64, 128, 256]
+        in_ch = config.num_grid_channels  # 5
+        use_residual = getattr(config, 'use_residual', False)
 
-        # Build conv layers (all except final)
-        layers = []
-        for out_ch in channels[:-1]:
-            layers.extend([
-                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_ch),
-                nn.ReLU(inplace=True),
-                nn.MaxPool2d(2)
-            ])
-            in_ch = out_ch
+        if use_residual:
+            # Residual CNN architecture
+            # Initial conv to expand channels
+            self.stem = nn.Sequential(
+                nn.Conv2d(in_ch, channels[0], kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(channels[0]),
+                nn.ReLU(inplace=True)
+            )
 
-        self.conv_layers = nn.Sequential(*layers)
+            # Residual blocks with downsampling
+            blocks = []
+            for i in range(len(channels) - 1):
+                blocks.append(ResidualBlock(channels[i], channels[i+1], downsample=True))
+            self.conv_layers = nn.Sequential(*blocks)
 
-        # Final conv layer - NAMED for Grad-CAM
-        self.final_conv = nn.Sequential(
-            nn.Conv2d(in_ch, channels[-1], kernel_size=3, padding=1),
-            nn.BatchNorm2d(channels[-1]),
-            nn.ReLU(inplace=True)
-        )
+            # Final conv for Grad-CAM (named layer)
+            self.final_conv = nn.Sequential(
+                nn.Conv2d(channels[-1], channels[-1], kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(channels[-1]),
+                nn.ReLU(inplace=True)
+            )
+        else:
+            # Original architecture (for backward compatibility)
+            self.stem = None
+            layers = []
+            for out_ch in channels[:-1]:
+                layers.extend([
+                    nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                    nn.BatchNorm2d(out_ch),
+                    nn.ReLU(inplace=True),
+                    nn.MaxPool2d(2)
+                ])
+                in_ch = out_ch
+
+            self.conv_layers = nn.Sequential(*layers)
+
+            # Final conv layer - NAMED for Grad-CAM
+            self.final_conv = nn.Sequential(
+                nn.Conv2d(in_ch, channels[-1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(channels[-1]),
+                nn.ReLU(inplace=True)
+            )
 
         # Adaptive pooling to fixed spatial size
         self.pool = nn.AdaptiveAvgPool2d((4, 4))
 
-        # Linear projection to latent space
+        # Linear projection to latent space with larger intermediate dimension
         # After pool: (channels[-1], 4, 4) = channels[-1] * 16 features
         projection_input_dim = channels[-1] * 16
+        intermediate_dim = max(256, config.latent_dim * 2)  # At least 256 or 2x latent_dim
         self.project = nn.Sequential(
-            nn.Linear(projection_input_dim, 128),
+            nn.Linear(projection_input_dim, intermediate_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(128, config.latent_dim)
+            nn.Linear(intermediate_dim, config.latent_dim)
         )
 
         self.latent_dim = config.latent_dim
+        self.use_residual = use_residual
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass.
 
         Args:
-            x: Grid tensor of shape (B, 4, H, W)
+            x: Grid tensor of shape (B, 5, H, W)
 
         Returns:
             Latent vector of shape (B, latent_dim)
         """
+        if self.stem is not None:
+            x = self.stem(x)
         x = self.conv_layers(x)
         x = self.final_conv(x)  # Named for Grad-CAM hooks
         x = self.pool(x)
@@ -149,15 +223,28 @@ class PointwiseScorer(nn.Module):
         self.encoder = FloorPlanEncoder(config)
         self.scenario_encoder = ScenarioEncoder(config)
 
-        # Scoring head: combined features → raw score
+        # Build deeper scoring head with configurable layers
         feature_dim = config.latent_dim + config.scenario_output_dim
-        self.scoring_head = nn.Sequential(
-            nn.Linear(feature_dim, config.scoring_hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(config.dropout),
-            nn.Linear(config.scoring_hidden_dim, 1)  # Raw score, NO activation
-        )
+        hidden_dim = getattr(config, 'scoring_hidden_dim', 32)
+        num_layers = getattr(config, 'scoring_num_layers', 2)
+        use_layer_norm = getattr(config, 'use_layer_norm', False)
+        dropout = config.dropout
 
+        layers = []
+        in_features = feature_dim
+
+        for i in range(num_layers):
+            layers.append(nn.Linear(in_features, hidden_dim))
+            if use_layer_norm:
+                layers.append(nn.LayerNorm(hidden_dim))
+            layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Dropout(dropout))
+            in_features = hidden_dim
+
+        # Final output layer (raw score, NO activation)
+        layers.append(nn.Linear(hidden_dim, 1))
+
+        self.scoring_head = nn.Sequential(*layers)
         self.config = config
 
     def forward(self, grid: torch.Tensor, scenario: torch.Tensor) -> torch.Tensor:

@@ -23,7 +23,7 @@ class RankNetLoss(nn.Module):
     binary cross-entropy with the pairwise label.
 
     More robust to noisy labels due to smooth gradients.
-    Supports optional confidence weighting.
+    Supports optional confidence weighting and label smoothing.
 
     Reference:
         Burges et al. "Learning to Rank using Gradient Descent" (2005)
@@ -31,11 +31,14 @@ class RankNetLoss(nn.Module):
     Args:
         sigma: Scaling factor for logit (default: 1.0)
             Higher sigma makes the sigmoid sharper.
+        label_smoothing: Smooth labels toward 0.5 to handle noise (default: 0.0)
+            With smoothing=0.1, labels become 0.05 and 0.95 instead of 0 and 1.
     """
 
-    def __init__(self, sigma: float = 1.0):
+    def __init__(self, sigma: float = 1.0, label_smoothing: float = 0.0):
         super().__init__()
         self.sigma = sigma
+        self.label_smoothing = label_smoothing
 
     def forward(
         self,
@@ -57,10 +60,18 @@ class RankNetLoss(nn.Module):
         # Apply sigmoid to get P(A > B)
         prob = torch.sigmoid(self.sigma * logit)
 
+        # Apply label smoothing for noisy pairs
+        target = label.float()
+        if self.label_smoothing > 0:
+            # Smooth labels toward 0.5
+            # label=1 → 1 - smoothing/2 (e.g., 0.95)
+            # label=0 → smoothing/2 (e.g., 0.05)
+            target = target * (1 - self.label_smoothing) + 0.5 * self.label_smoothing
+
         # Binary cross-entropy
         loss = F.binary_cross_entropy(
             prob,
-            label.float(),
+            target,
             reduction='none'
         )
 
@@ -201,6 +212,7 @@ def get_loss_function(config) -> nn.Module:
         Loss module (RankNetLoss or MarginHingeLoss)
     """
     if config.loss_type == 'ranknet':
-        return RankNetLoss(sigma=config.sigma)
+        label_smoothing = getattr(config, 'label_smoothing', 0.0)
+        return RankNetLoss(sigma=config.sigma, label_smoothing=label_smoothing)
     else:
         return MarginHingeLoss(margin=config.margin)

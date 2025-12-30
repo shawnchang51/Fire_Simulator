@@ -80,7 +80,7 @@ import yaml
 
 from datetime import datetime
 
-from .config import RankingConfig
+from .config import RankingConfig, get_high_capacity_config, get_balanced_config, get_legacy_config
 from .dataset import (
     create_pairwise_dataloaders,
     SingleConfigDataset,
@@ -112,6 +112,16 @@ def parse_args():
         type=str,
         default=None,
         help="Path to YAML config file. CLI arguments override config file values."
+    )
+
+    # Configuration preset
+    parser.add_argument(
+        '--preset',
+        type=str,
+        choices=['default', 'high_capacity', 'balanced', 'legacy'],
+        default=None,
+        help="Use predefined config preset: 'high_capacity' (AUC 0.85-0.90), "
+             "'balanced' (moderate capacity), 'legacy' (original K=8 architecture)"
     )
 
     # Data arguments
@@ -271,47 +281,52 @@ def save_config_to_yaml(config: RankingConfig, output_path: str, extra_params: O
         'data_dir': config.data_dir,
         'floor_plans_dir': config.floor_plans_dir,
         'target_grid_size': list(config.target_grid_size),
-        
+
         # Grid encoding
         'num_grid_channels': config.num_grid_channels,
-        
+
         # CNN Encoder
         'cnn_channels': config.cnn_channels,
         'latent_dim': config.latent_dim,
-        
+        'use_residual': getattr(config, 'use_residual', False),
+
         # Scenario MLP
         'scenario_input_dim': config.scenario_input_dim,
         'scenario_hidden_dim': config.scenario_hidden_dim,
         'scenario_output_dim': config.scenario_output_dim,
-        
+
         # Scoring Head
         'scoring_hidden_dim': config.scoring_hidden_dim,
+        'scoring_num_layers': getattr(config, 'scoring_num_layers', 2),
+        'use_layer_norm': getattr(config, 'use_layer_norm', False),
         'dropout': config.dropout,
-        
+
         # Loss function
         'loss_type': config.loss_type,
         'margin': config.margin,
         'sigma': config.sigma,
-        
+        'label_smoothing': getattr(config, 'label_smoothing', 0.0),
+
         # Regularization
         'l1_lambda': config.l1_lambda,
         'weight_decay': config.weight_decay,
-        
+
         # Training
         'batch_size': config.batch_size,
+        'gradient_accumulation_steps': getattr(config, 'gradient_accumulation_steps', 1),
         'learning_rate': config.learning_rate,
         'warmup_epochs': config.warmup_epochs,
         'epochs': config.epochs,
         'early_stopping_patience': config.early_stopping_patience,
         'num_workers': config.num_workers,
-        
+
         # Checkpoint and logging
         'checkpoint_dir': config.checkpoint_dir,
         'log_dir': config.log_dir,
-        
+
         # Reproducibility
         'seed': config.seed,
-        
+
         # Data Augmentation
         'augment_shift': config.augment_shift,
     }
@@ -326,17 +341,40 @@ def save_config_to_yaml(config: RankingConfig, output_path: str, extra_params: O
 
 def create_config_from_args(args) -> RankingConfig:
     """
-    Create RankingConfig from command line arguments and optional YAML config.
-    
+    Create RankingConfig from command line arguments, preset, and optional YAML config.
+
     Priority (highest to lowest):
     1. CLI arguments (if explicitly provided)
     2. YAML config file values
-    3. RankingConfig defaults
+    3. Preset configuration
+    4. RankingConfig defaults
     """
-    # Start with defaults from RankingConfig
-    config_kwargs = {}
-    
-    # Load YAML config if provided
+    # Check for preset first
+    preset = getattr(args, 'preset', None)
+    if preset == 'high_capacity':
+        base_config = get_high_capacity_config()
+        print(f"Using preset: high_capacity (target AUC 0.85-0.90)")
+    elif preset == 'balanced':
+        base_config = get_balanced_config()
+        print(f"Using preset: balanced")
+    elif preset == 'legacy':
+        base_config = get_legacy_config()
+        print(f"Using preset: legacy (original K=8 architecture)")
+    else:
+        base_config = None
+
+    # Start with preset config or empty dict
+    if base_config is not None:
+        # Extract all config fields from preset
+        config_kwargs = {
+            field: getattr(base_config, field)
+            for field in base_config.__dataclass_fields__
+            if getattr(base_config, field) is not None
+        }
+    else:
+        config_kwargs = {}
+
+    # Load YAML config if provided (overrides preset)
     yaml_config = {}
     if args.config:
         print(f"Loading config from: {args.config}")
@@ -350,17 +388,22 @@ def create_config_from_args(args) -> RankingConfig:
             'num_grid_channels': 'num_grid_channels',
             'cnn_channels': 'cnn_channels',
             'latent_dim': 'latent_dim',
+            'use_residual': 'use_residual',
             'scenario_input_dim': 'scenario_input_dim',
             'scenario_hidden_dim': 'scenario_hidden_dim',
             'scenario_output_dim': 'scenario_output_dim',
             'scoring_hidden_dim': 'scoring_hidden_dim',
+            'scoring_num_layers': 'scoring_num_layers',
+            'use_layer_norm': 'use_layer_norm',
             'dropout': 'dropout',
             'loss_type': 'loss_type',
             'margin': 'margin',
             'sigma': 'sigma',
+            'label_smoothing': 'label_smoothing',
             'l1_lambda': 'l1_lambda',
             'weight_decay': 'weight_decay',
             'batch_size': 'batch_size',
+            'gradient_accumulation_steps': 'gradient_accumulation_steps',
             'learning_rate': 'learning_rate',
             'warmup_epochs': 'warmup_epochs',
             'epochs': 'epochs',

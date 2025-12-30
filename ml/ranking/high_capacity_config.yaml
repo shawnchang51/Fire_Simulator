@@ -1,0 +1,58 @@
+# High Capacity Ranking Model Configuration
+# Target AUC: 0.85-0.90
+# Model parameters: ~2.9M (up from ~50K)
+
+# Data paths
+data_dir: combined_fast
+floor_plans_dir: combined_fast/floor_plans
+target_grid_size: [96, 128]
+
+# Grid encoding
+num_grid_channels: 5  # wall, passable, doors, exits, valid_mask
+
+# CNN Encoder - EXPANDED
+cnn_channels: [32, 64, 128, 256]  # was [16, 32, 64]
+latent_dim: 64                     # was 8 (8x increase)
+use_residual: true                 # Enable residual connections
+
+# Scenario MLP - LARGER
+scenario_input_dim: 4
+scenario_hidden_dim: 64            # was 32
+scenario_output_dim: 32            # was 16
+
+# Scoring Head - DEEPER
+scoring_hidden_dim: 64             # was 32
+scoring_num_layers: 3              # was 2
+use_layer_norm: true               # Enable LayerNorm
+dropout: 0.1                       # was 0.3 (reduced)
+
+# Loss function
+loss_type: ranknet                 # Use RankNet (supports confidence weighting)
+margin: 0.1                        # For hinge loss (not used with ranknet)
+sigma: 1.0                         # RankNet logistic scaling
+label_smoothing: 0.0               # Set to 0.05-0.1 if overfitting
+
+# Regularization - REDUCED
+l1_lambda: 0.001                   # was 0.005
+weight_decay: 0.00005              # was 0.0001
+
+# Training
+batch_size: 256                    # was 128 (larger for stability)
+gradient_accumulation_steps: 1     # Set to 2-4 if GPU memory limited
+learning_rate: 0.0005              # was 0.001 (slightly lower for larger model)
+warmup_epochs: 10                  # was 5 (longer warmup)
+epochs: 150                        # was 100
+early_stopping_patience: 20        # was 15
+
+# Data loading
+num_workers: 8                     # Increase if CPU allows
+
+# Checkpoint and logging
+checkpoint_dir: checkpoints/ranking_high_capacity
+log_dir: logs/ranking_high_capacity
+
+# Reproducibility
+seed: 42
+
+# Data Augmentation
+augment_shift: true

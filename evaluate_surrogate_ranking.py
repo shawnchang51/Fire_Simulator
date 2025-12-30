@@ -81,15 +81,41 @@ def load_model_and_config(checkpoint_path: str) -> Tuple[nn.Module, ModelConfig,
 
     # Extract config
     config_dict = checkpoint.get('config', {})
-    config = ModelConfig(**config_dict) if config_dict else ModelConfig()
+
+    if not config_dict:
+        logger.warning("No config found in checkpoint! Using default ModelConfig()")
+        logger.warning("This may cause issues if the model has non-default architecture")
+        config = ModelConfig()
+    else:
+        # Filter config_dict to only include valid ModelConfig fields
+        from dataclasses import fields
+        valid_fields = {f.name for f in fields(ModelConfig)}
+        filtered_config = {k: v for k, v in config_dict.items() if k in valid_fields}
+        config = ModelConfig(**filtered_config)
 
     # Create model
     model = FireSimulationSurrogate(config)
-    model.load_state_dict(checkpoint['model_state_dict'])
+
+    try:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    except Exception as e:
+        logger.error(f"Failed to load model state dict: {e}")
+        logger.error("The checkpoint config may not match the model architecture")
+        raise
+
     model.eval()
 
+    # Infer and log model architecture details from the loaded model
+    num_params = model.count_parameters()
+    num_outputs = config.num_outputs
+
     logger.info(f"Loaded model from {checkpoint_path}")
-    logger.info(f"Model has {model.count_parameters():,} parameters")
+    logger.info(f"Model architecture:")
+    logger.info(f"  - Parameters: {num_params:,}")
+    logger.info(f"  - Grid channels: {config.num_grid_channels}")
+    logger.info(f"  - CNN channels: {config.cnn_channels}")
+    logger.info(f"  - Output dimensions: {num_outputs}")
+    logger.info(f"  - Output names: {config.output_names}")
 
     return model, config, checkpoint
 
@@ -132,15 +158,32 @@ def predict_all_scores(
             all_predictions.append(predictions.cpu().numpy())
             all_targets.append(targets.numpy())
 
-    all_predictions = np.concatenate(all_predictions, axis=0)  # (N, 4)
-    all_targets = np.concatenate(all_targets, axis=0)  # (N, 4)
+    all_predictions = np.concatenate(all_predictions, axis=0)  # (N, num_outputs)
+    all_targets = np.concatenate(all_targets, axis=0)  # (N, num_outputs)
+
+    # Log the shapes
+    logger.info(f"Prediction shape: {all_predictions.shape}")
+    logger.info(f"Target shape: {all_targets.shape}")
 
     # Denormalize predictions and targets
     if target_stats is not None:
         means = np.array(target_stats['means'])
         stds = np.array(target_stats['stds'])
-        all_predictions = all_predictions * stds + means
-        all_targets = all_targets * stds + means
+
+        # Check if shapes match
+        if len(means) != all_predictions.shape[1]:
+            logger.warning(f"Target stats mismatch: expected {all_predictions.shape[1]} outputs, "
+                         f"but got {len(means)} normalization stats")
+            logger.warning("Proceeding without denormalization")
+        else:
+            all_predictions = all_predictions * stds + means
+            all_targets = all_targets * stds + means
+
+    # Check if model outputs match expected format for score computation
+    if all_predictions.shape[1] != 4:
+        logger.error(f"Score computation expects 4 outputs (survival_rate, avg_evacuation_time, steps, avg_fire_damage)")
+        logger.error(f"But model outputs {all_predictions.shape[1]} values")
+        raise ValueError(f"Model output shape mismatch: expected 4 outputs, got {all_predictions.shape[1]}")
 
     # Compute scores from predictions
     predicted_scores = np.array([
@@ -588,6 +631,20 @@ def main():
         **per_plan_metrics
     }
 
+    # Add model architecture information
+    all_metrics['model_info'] = {
+        'checkpoint_path': str(args.checkpoint),
+        'num_parameters': model.count_parameters(),
+        'num_grid_channels': config.num_grid_channels,
+        'cnn_channels': config.cnn_channels,
+        'num_outputs': config.num_outputs,
+        'output_names': config.output_names,
+        'scenario_input_dim': config.scenario_input_dim,
+        'scenario_hidden_dims': config.scenario_hidden_dims,
+        'head_hidden_dims': config.head_hidden_dims,
+        'dropout': config.dropout
+    }
+
     # Add score statistics
     all_metrics['score_statistics'] = {
         'predicted_mean': float(np.mean(predicted_scores)),
@@ -634,6 +691,13 @@ def main():
           f"σ={all_metrics['score_statistics']['ground_truth_std']:.4f}, "
           f"range=[{all_metrics['score_statistics']['ground_truth_min']:.4f}, "
           f"{all_metrics['score_statistics']['ground_truth_max']:.4f}]")
+
+    # Show model architecture summary
+    print("\n MODEL ARCHITECTURE:")
+    print(f"   Checkpoint:        {all_metrics['model_info']['checkpoint_path']}")
+    print(f"   Parameters:        {all_metrics['model_info']['num_parameters']:,}")
+    print(f"   Output dimensions: {all_metrics['model_info']['num_outputs']}")
+    print(f"   CNN channels:      {all_metrics['model_info']['cnn_channels']}")
     print()
 
 

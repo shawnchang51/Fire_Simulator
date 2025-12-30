@@ -343,6 +343,8 @@ def train_ranking_model(
     device: torch.device,
     scenario_stats: Optional[Dict] = None,
     train_dataset: Optional[PairwiseDatasetV2] = None,
+    resume_checkpoint: Optional[Dict] = None,
+    sampler: Optional[HardNegativeSampler] = None,
 ) -> Tuple[CrossAttentionRanker, Dict[str, List[float]]]:
     """
     Full training loop for ranking model V2.
@@ -354,39 +356,80 @@ def train_ranking_model(
         device: Device to train on
         scenario_stats: Normalization statistics
         train_dataset: Training dataset (for hard negative mining)
+        resume_checkpoint: Optional dict with 'model', 'optimizer', 'history',
+                          'start_epoch', 'best_val_auc' for resuming training
+        sampler: Optional pre-created HardNegativeSampler
 
     Returns:
         Tuple of (trained_model, training_history)
     """
+    is_resuming = resume_checkpoint is not None
+
     print(f"\n{'='*60}")
-    print("RANKING MODEL V2 - TRAINING")
+    if is_resuming:
+        print("RANKING MODEL V2 - RESUME TRAINING")
+    else:
+        print("RANKING MODEL V2 - TRAINING")
     print(f"{'='*60}")
 
-    # Create model
-    model = create_ranking_model(config)
-    model = model.to(device)
-    print(f"Model parameters: {model.count_parameters():,}")
+    # Handle resume vs fresh training
+    if is_resuming:
+        model = resume_checkpoint['model']
+        optimizer = resume_checkpoint['optimizer']
+        history = resume_checkpoint['history']
+        start_epoch = resume_checkpoint['start_epoch']
+        best_val_auc = resume_checkpoint['best_val_auc']
+        print(f"Resuming from epoch {start_epoch}")
+        print(f"Previous best AUC: {best_val_auc:.4f}")
+    else:
+        # Create model
+        model = create_ranking_model(config)
+        model = model.to(device)
+        print(f"Model parameters: {model.count_parameters():,}")
 
-    # Create optimizer
-    optimizer = AdamW(
-        model.parameters(),
-        lr=config.learning_rate,
-        weight_decay=config.weight_decay
-    )
+        # Create optimizer
+        optimizer = AdamW(
+            model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay
+        )
 
-    # Create scheduler
+        # Training history
+        history = {
+            'train_loss': [],
+            'train_accuracy': [],
+            'val_loss': [],
+            'val_accuracy': [],
+            'val_auc': [],
+            'learning_rate': [],
+        }
+
+        # Add auxiliary task tracking
+        for task in config.auxiliary_tasks:
+            history[f'train_aux_{task}'] = []
+            history[f'val_aux_{task}'] = []
+
+        start_epoch = 0
+        best_val_auc = 0.0
+
+    # Create scheduler (always recreate for correct step count)
     num_training_steps = config.epochs * len(train_loader)
     num_warmup_steps = config.warmup_epochs * len(train_loader)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps, num_training_steps
     )
 
+    # Fast-forward scheduler if resuming
+    if is_resuming and start_epoch > 0:
+        for _ in range(start_epoch * len(train_loader)):
+            scheduler.step()
+
     # Create loss function
     criterion = create_multi_task_loss(config)
 
-    # Setup hard negative mining (if enabled)
-    hard_sampler = None
-    if config.mining_strategy != "none" and train_dataset is not None:
+    # Setup hard negative mining (if enabled and not already provided)
+    hard_sampler = sampler
+    if hard_sampler is None and config.mining_strategy != "none" and train_dataset is not None:
         hard_sampler = create_sampler(train_dataset, config, model)
         batch_sampler = HardNegativeBatchSampler(
             hard_sampler, config.batch_size, drop_last=True
@@ -395,31 +438,17 @@ def train_ranking_model(
         train_loader = create_train_loader_with_sampler(
             train_dataset, batch_sampler, config
         )
+
+    if hard_sampler is not None:
         print(f"Hard negative mining: {config.mining_strategy}")
         print(f"  - Hard ratio: {config.hard_negative_ratio}")
         print(f"  - Threshold: {config.margin_threshold}")
-
-    # Training history
-    history = {
-        'train_loss': [],
-        'train_accuracy': [],
-        'val_loss': [],
-        'val_accuracy': [],
-        'val_auc': [],
-        'learning_rate': [],
-    }
-
-    # Add auxiliary task tracking
-    for task in config.auxiliary_tasks:
-        history[f'train_aux_{task}'] = []
-        history[f'val_aux_{task}'] = []
 
     # Checkpoint directory
     checkpoint_dir = Path(config.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Training state
-    best_val_auc = 0.0
     patience_counter = 0
 
     print(f"\nStarting training for {config.epochs} epochs...")
@@ -427,7 +456,7 @@ def train_ranking_model(
     print(f"Auxiliary tasks: {config.auxiliary_tasks}")
     print()
 
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         # Update sampler epoch for curriculum learning
         if hard_sampler is not None:
             if hasattr(train_loader, 'batch_sampler'):
@@ -435,7 +464,7 @@ def train_ranking_model(
 
             # Refresh hard negatives periodically (offline mining)
             if config.mining_strategy == "offline":
-                if epoch > 0 and epoch % config.mining_refresh_epochs == 0:
+                if epoch > 0 and epoch % config.mining_refresh_interval == 0:
                     hard_sampler.refresh_predictions(device)
 
         # Train

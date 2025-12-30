@@ -80,11 +80,9 @@ from .config import (
 )
 from .dataset import (
     create_pairwise_dataloaders,
-    create_train_loader_with_sampler,
     SingleConfigDataset,
     compute_scenario_stats
 )
-from .sampler import create_sampler
 from .model import CrossAttentionRanker
 from .train import train_ranking_model, load_checkpoint, load_resume_checkpoint
 from .evaluate import (
@@ -680,19 +678,6 @@ def mode_train(args):
             config, compute_stats=False
         )
 
-        # Create hard negative sampler if using mining
-        sampler = None
-        if config.mining_strategy != 'none':
-            sampler = create_sampler(
-                config.mining_strategy,
-                train_loader.dataset,
-                config.hard_negative_ratio,
-                config.margin_threshold
-            )
-            train_loader = create_train_loader_with_sampler(
-                train_loader.dataset, sampler, config
-            )
-
         print(f"  Train pairs: {len(train_loader.dataset):,}")
         print(f"  Val pairs: {len(val_loader.dataset):,}")
         print(f"  Test pairs: {len(test_loader.dataset):,}")
@@ -706,11 +691,12 @@ def mode_train(args):
             'best_val_auc': best_val_auc
         }
 
-        # Continue training
+        # Continue training (train_ranking_model handles sampler creation internally)
         model, history = train_ranking_model(
             config, train_loader, val_loader, device,
+            scenario_stats=scenario_stats,
             resume_checkpoint=resume_checkpoint,
-            sampler=sampler
+            train_dataset=train_loader.dataset if config.mining_strategy != 'none' else None
         )
 
         # Save final config
@@ -764,28 +750,15 @@ def mode_train(args):
         print("Loading data...")
         train_loader, val_loader, test_loader, stats = create_pairwise_dataloaders(config)
 
-        # Create hard negative sampler if using mining
-        sampler = None
-        if config.mining_strategy != 'none':
-            print(f"Creating {config.mining_strategy} hard negative sampler...")
-            sampler = create_sampler(
-                config.mining_strategy,
-                train_loader.dataset,
-                config.hard_negative_ratio,
-                config.margin_threshold
-            )
-            train_loader = create_train_loader_with_sampler(
-                train_loader.dataset, sampler, config
-            )
-
         print(f"  Train pairs: {len(train_loader.dataset):,}")
         print(f"  Val pairs: {len(val_loader.dataset):,}")
         print(f"  Test pairs: {len(test_loader.dataset):,}")
 
-        # Train model
+        # Train model (train_ranking_model handles sampler creation internally)
         model, history = train_ranking_model(
             config, train_loader, val_loader, device,
-            sampler=sampler
+            scenario_stats=stats.get('scenario_stats'),
+            train_dataset=train_loader.dataset if config.mining_strategy != 'none' else None
         )
 
         # Save config

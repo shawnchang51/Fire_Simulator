@@ -21,8 +21,11 @@ Usage:
     # Resume in-place (overwrite original checkpoints)
     python -m ml.ranking.run_training --mode train --resume-from checkpoints/ranking --resume-in-place
 
-    # Evaluate on test set
+    # Evaluate on test set (using best model)
     python -m ml.ranking.run_training --mode eval --checkpoint checkpoints/ranking/best_model.pt
+
+    # Evaluate on test set (using latest model)
+    python -m ml.ranking.run_training --mode eval --checkpoint checkpoints/ranking/latest_model.pt
 
     # Generate visualizations
     python -m ml.ranking.run_training --mode visualize --checkpoint checkpoints/ranking/best_model.pt --output viz/

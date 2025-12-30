@@ -7,7 +7,7 @@ Key Features:
     - L1 regularization on latent vectors
     - Warmup + cosine annealing LR schedule
     - Early stopping on validation AUC
-    - Checkpointing best model
+    - Checkpointing best model (best_model.pt) and latest model (latest_model.pt)
     - TensorBoard logging (optional)
 """
 
@@ -367,6 +367,17 @@ def train_ranking_model(
             f"LR: {train_metrics['learning_rate']:.2e}"
         )
 
+        # Save latest model (every epoch)
+        latest_checkpoint_path = checkpoint_dir / "latest_model.pt"
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'val_auc': val_metrics['val_auc'],
+            'config': config.__dict__,
+            'history': history
+        }, latest_checkpoint_path)
+
         # Check for improvement
         if val_metrics['val_auc'] > best_val_auc:
             best_val_auc = val_metrics['val_auc']
@@ -529,7 +540,7 @@ def load_resume_checkpoint(
 
     # Load checkpoint file (auto-detect)
     checkpoint_file = None
-    for candidate in ['best_model.pt', 'checkpoint.pt', 'model.pt']:
+    for candidate in ['best_model.pt', 'latest_model.pt', 'checkpoint.pt', 'model.pt']:
         candidate_path = resume_path / candidate
         if candidate_path.exists():
             checkpoint_file = candidate_path
@@ -656,7 +667,7 @@ def load_checkpoint(
     checkpoint_path = Path(checkpoint_path)
     if checkpoint_path.is_dir():
         # Look for common checkpoint file names
-        candidates = ['best_model.pt', 'checkpoint.pt', 'model.pt']
+        candidates = ['best_model.pt', 'latest_model.pt', 'checkpoint.pt', 'model.pt']
         found = None
         for name in candidates:
             candidate_path = checkpoint_path / name

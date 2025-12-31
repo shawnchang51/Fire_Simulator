@@ -354,13 +354,13 @@ def parse_args():
     parser.add_argument(
         '--seed',
         type=int,
-        default=42,
+        default=None,
         help="Random seed (default: 42)"
     )
     parser.add_argument(
         '--num-workers',
         type=int,
-        default=16,
+        default=None,
         help="Number of data loading workers (default: 16)"
     )
     parser.add_argument(
@@ -623,7 +623,6 @@ def mode_train(args):
         print("=" * 60)
 
         resume_dir = Path(args.resume_from)
-        torch.manual_seed(args.seed)
 
         # Load config from resume directory
         resume_config_file = resume_dir / "config.yaml"
@@ -636,6 +635,9 @@ def mode_train(args):
         else:
             print("WARNING: No config.yaml found in resume directory")
             config = create_config_from_args(args)
+
+        # Set seed from config
+        torch.manual_seed(config.seed)
 
         # Set device
         if args.device:
@@ -716,8 +718,8 @@ def mode_train(args):
         print("PAIRWISE RANKING MODEL V2 - TRAINING")
         print("=" * 60)
 
-        torch.manual_seed(args.seed)
         config = create_config_from_args(args)
+        torch.manual_seed(config.seed)
 
         if args.device:
             device = torch.device(args.device)

@@ -139,14 +139,14 @@ def parse_args():
     parser.add_argument(
         '--data-dir',
         type=str,
-        default='combined_fast',
-        help="Root directory containing training data"
+        default=None,
+        help="Root directory containing training data (default: combined_fast)"
     )
     parser.add_argument(
         '--floor-plans-dir',
         type=str,
-        default='combined_fast/floor_plans',
-        help="Directory containing floor plan NPZ files"
+        default=None,
+        help="Directory containing floor plan NPZ files (default: combined_fast/floor_plans)"
     )
 
     # =====================

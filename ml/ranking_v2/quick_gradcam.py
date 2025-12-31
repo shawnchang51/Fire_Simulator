@@ -111,10 +111,18 @@ def main():
         print("matplotlib required")
         return
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    # Get valid mask to find crop region
+    valid_mask = grid_tensor[4].cpu().numpy()
+    rows = np.any(valid_mask > 0, axis=1)
+    cols = np.any(valid_mask > 0, axis=0)
+    row_min, row_max = np.where(rows)[0][[0, -1]]
+    col_min, col_max = np.where(cols)[0][[0, -1]]
 
-    # Floor plan - use passable mask (channel 1)
-    floor_plan_np = grid_tensor[1].cpu().numpy()
+    # Crop to valid region
+    floor_plan_np = grid_tensor[1].cpu().numpy()[row_min:row_max+1, col_min:col_max+1]
+    cam_cropped = cam[row_min:row_max+1, col_min:col_max+1]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     ax = axes[0]
     ax.imshow(floor_plan_np, cmap='gray')
@@ -122,13 +130,13 @@ def main():
     ax.axis('off')
 
     ax = axes[1]
-    ax.imshow(cam, cmap='jet')
+    ax.imshow(cam_cropped, cmap='jet')
     ax.set_title('GradCAM Attention')
     ax.axis('off')
 
     ax = axes[2]
     ax.imshow(floor_plan_np, cmap='gray')
-    ax.imshow(cam, cmap='jet', alpha=0.5)
+    ax.imshow(cam_cropped, cmap='jet', alpha=0.5)
     ax.set_title('GradCAM Overlay')
     ax.axis('off')
 

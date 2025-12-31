@@ -11,6 +11,45 @@ from .train import load_checkpoint
 from .visualize import GradCAM
 
 
+def encode_grid_5ch(grid_2d: np.ndarray, target_size=(96, 128)) -> np.ndarray:
+    """
+    Create 5-channel tensor from 2D grid.
+
+    Channels:
+        0: Wall mask (grid == -2)
+        1: Passable mask (grid == 0)
+        2: Door positions (empty for visualization)
+        3: Exit positions (empty for visualization)
+        4: Valid mask (1.0 for real grid, 0.0 for padding)
+    """
+    H, W = grid_2d.shape
+    tH, tW = target_size
+
+    # Create 5-channel encoding with -1.0 padding
+    encoded = np.full((5, tH, tW), -1.0, dtype=np.float32)
+
+    # Handle cases where grid is larger than target size - clip
+    H_copy = min(H, tH)
+    W_copy = min(W, tW)
+
+    # Channel 0: Wall mask
+    encoded[0, :H_copy, :W_copy] = (grid_2d[:H_copy, :W_copy] == -2).astype(np.float32)
+
+    # Channel 1: Passable mask
+    encoded[1, :H_copy, :W_copy] = (grid_2d[:H_copy, :W_copy] == 0).astype(np.float32)
+
+    # Channels 2 & 3: Door/Exit positions (empty for this viz)
+    encoded[2, :H_copy, :W_copy] = 0.0
+    encoded[3, :H_copy, :W_copy] = 0.0
+
+    # Channel 4: Valid mask
+    encoded[4, :H_copy, :W_copy] = 1.0
+    encoded[4, H_copy:, :] = 0.0
+    encoded[4, :, W_copy:] = 0.0
+
+    return encoded
+
+
 def main():
     parser = argparse.ArgumentParser(description="Quick GradCAM visualization")
     parser.add_argument('--checkpoint', type=str, required=True, help="Path to model checkpoint")
@@ -33,7 +72,7 @@ def main():
     model.eval()
 
     config = checkpoint['config']
-    target_size = config.get('target_grid_size', (96, 128))
+    target_size = tuple(config.get('target_grid_size', (96, 128)))
 
     # Find a floor plan
     if args.floor_plan:
@@ -50,28 +89,20 @@ def main():
 
     # Load and process floor plan
     data = np.load(npz_path)
-    grid = data['grid']  # Shape: (C, H, W) or (H, W)
+    grid_2d = data['grid']  # Shape: (H, W)
 
-    if grid.ndim == 2:
-        # Single channel, expand
-        grid = np.expand_dims(grid, 0)
-
-    # Resize if needed
-    from torch.nn.functional import interpolate
-    grid_tensor = torch.from_numpy(grid).float().unsqueeze(0)  # (1, C, H, W)
-    if grid_tensor.shape[-2:] != target_size:
-        grid_tensor = interpolate(grid_tensor, size=target_size, mode='bilinear', align_corners=False)
-
-    grid_tensor = grid_tensor.to(device)
+    # Encode to 5 channels
+    encoded = encode_grid_5ch(grid_2d, target_size)
+    grid_tensor = torch.from_numpy(encoded).to(device)  # (5, H, W)
 
     # Create dummy scenario (zeros, normalized)
     scenario_dim = config.get('scenario_input_dim', 5)
-    scenario = torch.zeros(1, scenario_dim, device=device)
+    scenario = torch.zeros(scenario_dim, device=device)
 
     # Generate GradCAM
     print("Generating GradCAM...")
     gradcam = GradCAM(model)
-    cam = gradcam.generate(grid_tensor.squeeze(0), scenario.squeeze(0))
+    cam = gradcam.generate(grid_tensor, scenario)
 
     # Plot
     try:
@@ -82,12 +113,12 @@ def main():
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-    # Floor plan (first channel or passable areas channel)
-    floor_plan_np = grid_tensor.squeeze(0)[min(1, grid_tensor.shape[1]-1)].cpu().numpy()
+    # Floor plan - use passable mask (channel 1)
+    floor_plan_np = grid_tensor[1].cpu().numpy()
 
     ax = axes[0]
     ax.imshow(floor_plan_np, cmap='gray')
-    ax.set_title('Floor Plan')
+    ax.set_title('Floor Plan (Passable Areas)')
     ax.axis('off')
 
     ax = axes[1]

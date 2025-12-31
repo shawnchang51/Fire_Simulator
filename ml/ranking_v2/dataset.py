@@ -105,6 +105,7 @@ class PairwiseDatasetV2(Dataset):
         floor_plans: Dict mapping floor_plan_id to grid data
         scenario_stats: Normalization statistics for scenarios
         augment: Whether to apply random shift augmentation (train only)
+        augment_rotate90: Whether to apply random 90-degree rotation (train only)
         score_diffs: Precomputed |score_a - score_b| for each pair
         hardness_indices: Indices sorted by hardness (hardest first)
         include_auxiliary: Whether to include auxiliary task labels
@@ -120,6 +121,7 @@ class PairwiseDatasetV2(Dataset):
         compute_stats: bool = False,
         max_pairs: Optional[int] = None,
         augment: bool = False,
+        augment_rotate90: bool = False,
         include_auxiliary: bool = True,
         auxiliary_tasks: Optional[List[str]] = None
     ):
@@ -134,11 +136,13 @@ class PairwiseDatasetV2(Dataset):
             compute_stats: If True, compute stats from this file
             max_pairs: Maximum number of pairs to load (for debugging)
             augment: If True, apply random shift augmentation (for training)
+            augment_rotate90: If True, apply random 90-degree rotation (for training)
             include_auxiliary: If True, include auxiliary task labels
             auxiliary_tasks: List of auxiliary tasks (e.g., ["survival_rate", "steps"])
         """
         self.target_size = target_size
         self.augment = augment
+        self.augment_rotate90 = augment_rotate90
         self.include_auxiliary = include_auxiliary
         self.auxiliary_tasks = auxiliary_tasks or ["survival_rate", "steps"]
 
@@ -360,6 +364,69 @@ class PairwiseDatasetV2(Dataset):
 
         return shifted
 
+    def _random_rotate_grid(self, grid: torch.Tensor) -> torch.Tensor:
+        """
+        Apply random 90-degree rotation augmentation to grid.
+
+        Randomly rotates by 0°, 90°, 180°, or 270° and re-pads to target size.
+        After rotation, the content is repositioned to the top-left corner
+        and padded appropriately.
+
+        Args:
+            grid: Grid tensor of shape (5, H, W)
+
+        Returns:
+            Rotated grid tensor of shape (5, tH, tW) with correct padding
+        """
+        # Random rotation: 0, 1, 2, or 3 times 90 degrees (counter-clockwise)
+        k = np.random.randint(0, 4)
+        if k == 0:
+            return grid  # No rotation
+
+        _, tH, tW = grid.shape
+
+        # Apply rotation (dims 1 and 2 are H and W)
+        rotated = torch.rot90(grid, k=k, dims=(1, 2))
+
+        # After rotation, dimensions may have swapped
+        _, rH, rW = rotated.shape
+
+        # If dimensions match target, we're done
+        if rH == tH and rW == tW:
+            return rotated
+
+        # Otherwise, we need to re-pad/crop to target size
+        # Create new grid with padding values
+        result = torch.full((5, tH, tW), -1.0, dtype=grid.dtype)
+        result[4] = 0.0  # Valid mask padding is 0.0
+
+        # Find the valid content region in rotated grid
+        valid_mask = rotated[4]
+        valid_rows = (valid_mask > 0.5).any(dim=1).nonzero(as_tuple=True)[0]
+        valid_cols = (valid_mask > 0.5).any(dim=0).nonzero(as_tuple=True)[0]
+
+        if len(valid_rows) == 0 or len(valid_cols) == 0:
+            return result  # No valid content
+
+        # Get bounding box of valid content
+        min_row, max_row = valid_rows[0].item(), valid_rows[-1].item()
+        min_col, max_col = valid_cols[0].item(), valid_cols[-1].item()
+        content_h = max_row - min_row + 1
+        content_w = max_col - min_col + 1
+
+        # Crop content if it doesn't fit in target size
+        copy_h = min(content_h, tH)
+        copy_w = min(content_w, tW)
+
+        # Copy valid content to top-left of result (same pattern as original encoding)
+        result[:, :copy_h, :copy_w] = rotated[
+            :,
+            min_row:min_row + copy_h,
+            min_col:min_col + copy_w
+        ]
+
+        return result
+
     def _normalize_scenario(self, scenario: Dict) -> torch.Tensor:
         """
         Normalize scenario parameters.
@@ -439,6 +506,11 @@ class PairwiseDatasetV2(Dataset):
         # Encode grids
         grid_a = self._encode_grid(pair['floor_plan_id_a'], pair['config_a'])
         grid_b = self._encode_grid(pair['floor_plan_id_b'], pair['config_b'])
+
+        # Apply random 90-degree rotation augmentation (training only, independent for each grid)
+        if self.augment_rotate90:
+            grid_a = self._random_rotate_grid(grid_a)
+            grid_b = self._random_rotate_grid(grid_b)
 
         # Apply random shift augmentation (training only, independent for each grid)
         if self.augment:
@@ -686,6 +758,7 @@ def create_pairwise_dataloaders(
         scenario_stats=scenario_stats,
         compute_stats=False,
         augment=config.augment_shift,
+        augment_rotate90=config.augment_rotate90,
         include_auxiliary=len(config.auxiliary_tasks) > 0,
         auxiliary_tasks=config.auxiliary_tasks
     )

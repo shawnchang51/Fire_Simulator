@@ -99,6 +99,7 @@ class RankingV2Config:
 
         # Data Augmentation
         augment_shift: Random shift augmentation for training
+        augment_rotate90: Random 90-degree rotation augmentation (0°, 90°, 180°, 270°)
 
         # Normalization stats
         scenario_means: Precomputed scenario means
@@ -183,6 +184,7 @@ class RankingV2Config:
 
     # Data Augmentation
     augment_shift: bool = True
+    augment_rotate90: bool = False  # Random 90-degree rotation (0°, 90°, 180°, 270°)
 
     # Normalization stats (computed from training data)
     scenario_means: Optional[List[float]] = None

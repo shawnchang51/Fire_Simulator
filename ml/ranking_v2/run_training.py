@@ -20,6 +20,9 @@ Usage:
     python -m ml.ranking_v2.run_training --mode train --epochs 100 \
         --mining-strategy curriculum --use-cross-attention --auxiliary-tasks survival_rate,steps
 
+    # Train with rotation augmentation
+    python -m ml.ranking_v2.run_training --mode train --preset full --augment-rotate90
+
     # Train with YAML config
     python -m ml.ranking_v2.run_training --mode train --config config_v2.yaml
 
@@ -36,6 +39,10 @@ Example YAML config:
     # Data paths
     data_dir: combined_fast
     floor_plans_dir: combined_fast/floor_plans
+
+    # Data Augmentation
+    augment_shift: true
+    augment_rotate90: true  # Random 90-degree rotation (0°, 90°, 180°, 270°)
 
     # V2 Cross-Attention settings
     use_cross_attention: true
@@ -350,6 +357,20 @@ def parse_args():
     )
 
     # =====================
+    # Data Augmentation arguments
+    # =====================
+    parser.add_argument(
+        '--augment-rotate90',
+        action='store_true',
+        help="Enable random 90-degree rotation augmentation (0°, 90°, 180°, 270°)"
+    )
+    parser.add_argument(
+        '--no-augment-rotate90',
+        action='store_true',
+        help="Disable random 90-degree rotation augmentation"
+    )
+
+    # =====================
     # Other arguments
     # =====================
     parser.add_argument(
@@ -465,6 +486,7 @@ def save_config_to_yaml(
 
         # Data Augmentation
         'augment_shift': config.augment_shift,
+        'augment_rotate90': config.augment_rotate90,
     }
 
     if extra_params:
@@ -538,7 +560,8 @@ def create_config_from_args(args) -> RankingV2Config:
             'loss_type', 'margin', 'sigma', 'label_smoothing', 'ranking_loss_weight',
             'l1_lambda', 'weight_decay', 'batch_size', 'gradient_accumulation_steps',
             'learning_rate', 'warmup_epochs', 'epochs', 'early_stopping_patience',
-            'num_workers', 'checkpoint_dir', 'log_dir', 'seed', 'augment_shift',
+            'num_workers', 'checkpoint_dir', 'log_dir', 'seed',
+            'augment_shift', 'augment_rotate90',
             'scenario_means', 'scenario_stds',
         ]
 
@@ -596,6 +619,12 @@ def create_config_from_args(args) -> RankingV2Config:
     # Handle boolean flag for use_residual
     if args.use_residual:
         config_kwargs['use_residual'] = True
+
+    # Handle boolean flags for rotation augmentation
+    if args.augment_rotate90:
+        config_kwargs['augment_rotate90'] = True
+    elif args.no_augment_rotate90:
+        config_kwargs['augment_rotate90'] = False
 
     # Handle auxiliary tasks as comma-separated string
     if args.auxiliary_tasks:

@@ -35,7 +35,7 @@ mining_strategy: curriculum
 hard_negative_ratio: 0.5
 margin_threshold: 0.3
 curriculum_warmup_epochs: 10
-mining_refresh_interval: 5
+mining_refresh_epochs: 5
 
 # V2: Auxiliary Tasks (DISABLED)
 auxiliary_tasks: []

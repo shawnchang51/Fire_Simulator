@@ -33,7 +33,7 @@ attention_heads: 4
 attention_dim: 64
 num_attention_layers: 2
 attention_dropout: 0.1
-use_ffn_in_attention: true
+use_attention_ffn: true
 
 # V2: Hard Negative Mining (DISABLED)
 mining_strategy: none

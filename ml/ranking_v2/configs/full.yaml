@@ -33,14 +33,14 @@ attention_heads: 4
 attention_dim: 64
 num_attention_layers: 2
 attention_dropout: 0.1
-use_ffn_in_attention: true
+use_attention_ffn: true
 
 # V2: Hard Negative Mining
 mining_strategy: curriculum  # none, online, offline, curriculum
 hard_negative_ratio: 0.5
 margin_threshold: 0.3
 curriculum_warmup_epochs: 10
-mining_refresh_interval: 5
+mining_refresh_epochs: 5
 
 # V2: Auxiliary Tasks
 auxiliary_tasks:

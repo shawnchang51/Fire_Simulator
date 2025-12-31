@@ -935,6 +935,7 @@ def mode_visualize(args):
             output_dir=output_dir,
             target_size=config.target_grid_size,
             n_samples=5,
+            scenario_input_dim=config.scenario_input_dim,
             device=device
         )
 

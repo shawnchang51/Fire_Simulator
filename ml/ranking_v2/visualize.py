@@ -473,6 +473,7 @@ def generate_gradcam_from_floor_plans(
     output_dir: str,
     target_size: Tuple[int, int] = (96, 128),
     n_samples: int = 5,
+    scenario_input_dim: int = 4,
     device: torch.device = None
 ):
     """
@@ -501,8 +502,7 @@ def generate_gradcam_from_floor_plans(
     output_path.mkdir(parents=True, exist_ok=True)
 
     gradcam = GradCAM(model)
-    scenario_dim = 5  # Default scenario dimension
-    scenario = torch.zeros(scenario_dim, device=device)
+    scenario = torch.zeros(scenario_input_dim, device=device)
 
     for i, npz_path in enumerate(npz_files):
         try:

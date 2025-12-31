@@ -249,7 +249,7 @@ class AttentionAnalyzer:
         """
         self.model = model.to(device)
         self.device = device
-        self.gradcam = GradCAM(model.encoder)
+        self.gradcam = GradCAM(model)
 
     def analyze_attention(
         self,

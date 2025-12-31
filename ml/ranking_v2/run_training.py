@@ -94,7 +94,8 @@ from .evaluate import (
 from .visualize import (
     generate_all_visualizations,
     plot_training_history,
-    visualize_gradcam_sample
+    visualize_gradcam_sample,
+    generate_gradcam_from_floor_plans
 )
 
 
@@ -921,6 +922,17 @@ def mode_visualize(args):
             history=history,
             output_dir=output_dir,
             n_samples=500,
+            device=device
+        )
+    else:
+        # Fallback: generate GradCAM directly from floor plan NPZ files
+        print("\nGenerating GradCAM from floor plans (no simulation_results.jsonl)...")
+        generate_gradcam_from_floor_plans(
+            model=model,
+            floor_plans_dir=config.floor_plans_dir,
+            output_dir=output_dir,
+            target_size=config.target_grid_size,
+            n_samples=5,
             device=device
         )
 

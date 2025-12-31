@@ -435,3 +435,120 @@ def generate_all_visualizations(
         print(f"Failed to generate Grad-CAM: {e}")
 
     print("Visualization generation complete!")
+
+
+def encode_grid_5ch(grid_2d: np.ndarray, target_size=(96, 128)) -> np.ndarray:
+    """
+    Create 5-channel tensor from 2D grid.
+
+    Channels:
+        0: Wall mask (grid == -2)
+        1: Passable mask (grid == 0)
+        2: Door positions (empty for visualization)
+        3: Exit positions (empty for visualization)
+        4: Valid mask (1.0 for real grid, 0.0 for padding)
+    """
+    H, W = grid_2d.shape
+    tH, tW = target_size
+
+    encoded = np.full((5, tH, tW), -1.0, dtype=np.float32)
+
+    H_copy = min(H, tH)
+    W_copy = min(W, tW)
+
+    encoded[0, :H_copy, :W_copy] = (grid_2d[:H_copy, :W_copy] == -2).astype(np.float32)
+    encoded[1, :H_copy, :W_copy] = (grid_2d[:H_copy, :W_copy] == 0).astype(np.float32)
+    encoded[2, :H_copy, :W_copy] = 0.0
+    encoded[3, :H_copy, :W_copy] = 0.0
+    encoded[4, :H_copy, :W_copy] = 1.0
+    encoded[4, H_copy:, :] = 0.0
+    encoded[4, :, W_copy:] = 0.0
+
+    return encoded
+
+
+def generate_gradcam_from_floor_plans(
+    model: CrossAttentionRanker,
+    floor_plans_dir: str,
+    output_dir: str,
+    target_size: Tuple[int, int] = (96, 128),
+    n_samples: int = 5,
+    device: torch.device = None
+):
+    """
+    Generate GradCAM visualizations directly from floor plan NPZ files.
+
+    This function doesn't require simulation_results.jsonl - it loads
+    floor plans directly and generates GradCAM heatmaps.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib required for visualization")
+        return
+
+    if device is None:
+        device = next(model.parameters()).device
+
+    floor_plans_path = Path(floor_plans_dir)
+    npz_files = sorted(floor_plans_path.glob("*.npz"))[:n_samples]
+
+    if not npz_files:
+        print(f"No NPZ files found in {floor_plans_dir}")
+        return
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    gradcam = GradCAM(model)
+    scenario_dim = 5  # Default scenario dimension
+    scenario = torch.zeros(scenario_dim, device=device)
+
+    for i, npz_path in enumerate(npz_files):
+        try:
+            data = np.load(npz_path)
+            grid_2d = data['grid']
+
+            encoded = encode_grid_5ch(grid_2d, target_size)
+            grid_tensor = torch.from_numpy(encoded).to(device)
+
+            cam = gradcam.generate(grid_tensor, scenario)
+
+            # Crop to valid region
+            valid_mask = grid_tensor[4].cpu().numpy()
+            rows = np.any(valid_mask > 0, axis=1)
+            cols = np.any(valid_mask > 0, axis=0)
+
+            if not np.any(rows) or not np.any(cols):
+                continue
+
+            row_min, row_max = np.where(rows)[0][[0, -1]]
+            col_min, col_max = np.where(cols)[0][[0, -1]]
+
+            floor_plan_np = grid_tensor[1].cpu().numpy()[row_min:row_max+1, col_min:col_max+1]
+            cam_cropped = cam[row_min:row_max+1, col_min:col_max+1]
+
+            # Plot
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+            axes[0].imshow(floor_plan_np, cmap='gray')
+            axes[0].set_title('Floor Plan (Passable Areas)')
+            axes[0].axis('off')
+
+            axes[1].imshow(cam_cropped, cmap='jet')
+            axes[1].set_title('GradCAM Attention')
+            axes[1].axis('off')
+
+            axes[2].imshow(floor_plan_np, cmap='gray')
+            axes[2].imshow(cam_cropped, cmap='jet', alpha=0.5)
+            axes[2].set_title('GradCAM Overlay')
+            axes[2].axis('off')
+
+            plt.tight_layout()
+            save_path = output_path / f"gradcam_{npz_path.stem}.png"
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"Saved GradCAM to {save_path}")
+
+        except Exception as e:
+            print(f"Failed to generate GradCAM for {npz_path.name}: {e}")

@@ -369,7 +369,7 @@ class PairwiseDatasetV2(Dataset):
         Apply random 90-degree rotation augmentation to grid.
 
         Randomly rotates by 0°, 90°, 180°, or 270° and re-pads to target size.
-        After rotation, the content is repositioned to the top-left corner
+        After rotation, the content is always repositioned to the top-left corner
         and padded appropriately.
 
         Args:
@@ -388,14 +388,7 @@ class PairwiseDatasetV2(Dataset):
         # Apply rotation (dims 1 and 2 are H and W)
         rotated = torch.rot90(grid, k=k, dims=(1, 2))
 
-        # After rotation, dimensions may have swapped
-        _, rH, rW = rotated.shape
-
-        # If dimensions match target, we're done
-        if rH == tH and rW == tW:
-            return rotated
-
-        # Otherwise, we need to re-pad/crop to target size
+        # Always reposition content to top-left (needed for all rotations)
         # Create new grid with padding values
         result = torch.full((5, tH, tW), -1.0, dtype=grid.dtype)
         result[4] = 0.0  # Valid mask padding is 0.0

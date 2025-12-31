@@ -475,15 +475,39 @@ def evaluate_on_explicit_pairs(
     
     logger.info(f"Pairs involve {len(unique_fp_ids)} unique floor plans")
 
-    # Create dataset to load floor plans and access encoding methods
+    # Load floor plans directly (we don't need simulation_results.jsonl for explicit pairs)
+    from pathlib import Path as PathLib
+    floor_plans = {}
+    floor_plans_path = PathLib(floor_plans_dir)
+    
+    for plan_id in unique_fp_ids:
+        plan_file = floor_plans_path / f"plan_{plan_id:05d}.npz"
+        if not plan_file.exists():
+            logger.error(f"Floor plan file not found: {plan_file}")
+            raise FileNotFoundError(f"Required floor plan {plan_id} not found")
+        
+        data = np.load(plan_file, allow_pickle=True)
+        floor_plans[plan_id] = {
+            'grid': data['grid'],
+            'door_positions': data['door_positions'],
+            'exit_positions': data['exit_positions']
+        }
+    
+    logger.info(f"Loaded {len(floor_plans)} floor plans")
+
+    # Create a minimal dataset object for encoding methods
+    # We use a dummy simulation_results file path since we won't load records
     temp_dataset = FireSimulationDataset(
-        simulation_results_file=simulation_results_file,
+        simulation_results_file=simulation_results_file,  # Won't be used
         floor_plans_dir=floor_plans_dir,
-        floor_plan_ids=unique_fp_ids,  # Only load floor plans that appear in pairs
+        floor_plan_ids=set(),  # Don't load via dataset
         target_size=config.target_grid_size if config else 64,
         scenario_stats=scenario_stats,
-        target_stats=None  # We don't need target normalization for prediction
+        target_stats=None
     )
+    
+    # Override floor_plans with our loaded ones
+    temp_dataset.floor_plans = floor_plans
 
     model = model.to(device)
     model.eval()
@@ -574,9 +598,22 @@ def print_ranking_report(metrics: Dict, title: str = "Surrogate Model Ranking Ev
     if 'pairwise_accuracy' in metrics:
         print("\n PAIRWISE RANKING ACCURACY:")
         print(f"   Accuracy:             {metrics['pairwise_accuracy']:.4f} ({metrics['pairwise_accuracy']*100:.2f}%)")
-        print(f"   Total pairs:          {metrics['total_pairs_evaluated']}")
-        print(f"   Correct predictions:  {metrics['correct_pairs']}")
-        print(f"   Avg score difference: {metrics['avg_score_difference']:.4f}")
+        
+        # Handle both 'total_pairs' (explicit pairs) and 'total_pairs_evaluated' (random sampling)
+        total_key = 'total_pairs' if 'total_pairs' in metrics else 'total_pairs_evaluated'
+        correct_key = 'correct_pairs'
+        
+        if total_key in metrics:
+            print(f"   Total pairs:          {metrics[total_key]}")
+            print(f"   Correct predictions:  {metrics[correct_key]}")
+        
+        # Show average confidence if available (only in explicit pairs mode)
+        if 'avg_confidence' in metrics:
+            print(f"   Avg label confidence: {metrics['avg_confidence']:.4f}")
+        
+        # Show average score difference if available (only in random sampling mode)
+        if 'avg_score_difference' in metrics:
+            print(f"   Avg score difference: {metrics['avg_score_difference']:.4f}")
 
     # AUC-ROC
     if 'auc_roc' in metrics:

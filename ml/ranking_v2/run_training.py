@@ -747,7 +747,7 @@ def mode_train(args):
         print()
 
         # Create dataloaders
-        print("Loading data...")
+        print(f"Loading data from {config.data_dir}...")
         train_loader, val_loader, test_loader, stats = create_pairwise_dataloaders(config)
 
         print(f"  Train pairs: {len(train_loader.dataset):,}")

@@ -2,21 +2,247 @@
 Ranking V2.1 使用指南 - 完整範例
 
 本指南展示如何使用所有新增的增強功能。
+
+使用方式:
+    # 使用新建模型 (隨機權重)
+    python -m ml.ranking_v2.examples.usage_guide
+
+    # 使用訓練好的模型
+    python -m ml.ranking_v2.examples.usage_guide --checkpoint path/to/model.pt
+
+    # 使用訓練好的模型 + 真實資料
+    python -m ml.ranking_v2.examples.usage_guide --checkpoint model.pt --data data.npz
+
+    # 指定語言和輸出目錄
+    python -m ml.ranking_v2.examples.usage_guide --checkpoint model.pt --language en --output-dir reports/
 """
 
+import argparse
+import sys
 import torch
 import torch.nn as nn
 import numpy as np
 from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
 
-# 設定裝置
+# =============================================================================
+# 使用者配置區 - 可直接修改這裡的值
+# =============================================================================
+class UserConfig:
+    """
+    在這裡指定你要使用的模型和資料路徑
+    也可以透過命令列參數覆蓋這些設定
+    """
+    # 模型 checkpoint 路徑 (設為 None 則使用隨機初始化的新模型)
+    CHECKPOINT_PATH: Optional[str] = None
+    # 例如: CHECKPOINT_PATH = "checkpoints/ranking_v2_best.pt"
+    # 例如: CHECKPOINT_PATH = r"C:\dev\Fire_Simulator\checkpoints\best_model.pt"
+
+    # 資料路徑 (設為 None 則使用隨機生成的假資料)
+    DATA_PATH: Optional[str] = None
+    # 例如: DATA_PATH = "data/floor_plan_001.npz"
+
+    # 報告語言: "zh" (中文) 或 "en" (英文)
+    LANGUAGE: str = "zh"
+
+    # 輸出目錄 (用於儲存報告、熱力圖等)
+    OUTPUT_DIR: str = "outputs"
+
+    # 要執行的示範 (None = 全部執行, 或指定數字列表如 [1, 4, 5])
+    RUN_DEMOS: Optional[list] = None
+    # 例如: RUN_DEMOS = [1, 4]  # 只執行示範 1 和 4
+
+
+def parse_args():
+    """解析命令列參數"""
+    parser = argparse.ArgumentParser(
+        description='Ranking V2.1 功能示範指南',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        '-c', '--checkpoint',
+        type=str,
+        default=None,
+        help='訓練好的模型 checkpoint 路徑 (.pt 檔案)'
+    )
+    parser.add_argument(
+        '-d', '--data',
+        type=str,
+        default=None,
+        help='輸入資料路徑 (.npz 檔案，包含 grid 和 scenario)'
+    )
+    parser.add_argument(
+        '-l', '--language',
+        type=str,
+        choices=['zh', 'en'],
+        default='zh',
+        help='報告語言 (預設: zh)'
+    )
+    parser.add_argument(
+        '-o', '--output-dir',
+        type=str,
+        default='outputs',
+        help='輸出目錄 (預設: outputs)'
+    )
+    parser.add_argument(
+        '--demos',
+        type=str,
+        default=None,
+        help='要執行的示範編號，以逗號分隔 (例如: 1,4,5)'
+    )
+    parser.add_argument(
+        '--list',
+        action='store_true',
+        help='列出所有可用的示範'
+    )
+    return parser.parse_args()
+
+
+# 合併配置
+def get_config():
+    """取得最終配置 (命令列參數優先於 UserConfig)"""
+    args = parse_args()
+
+    config = {
+        'checkpoint': args.checkpoint or UserConfig.CHECKPOINT_PATH,
+        'data': args.data or UserConfig.DATA_PATH,
+        'language': args.language or UserConfig.LANGUAGE,
+        'output_dir': args.output_dir or UserConfig.OUTPUT_DIR,
+        'demos': None,
+        'list_demos': args.list,
+    }
+
+    # 解析 demos
+    if args.demos:
+        config['demos'] = [int(x.strip()) for x in args.demos.split(',')]
+    elif UserConfig.RUN_DEMOS:
+        config['demos'] = UserConfig.RUN_DEMOS
+
+    return config
+
+
+# =============================================================================
+# 全域設定
+# =============================================================================
+CONFIG = get_config()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# 建立輸出目錄
+Path(CONFIG['output_dir']).mkdir(parents=True, exist_ok=True)
+
 print(f"使用裝置: {device}")
+print(f"Checkpoint: {CONFIG['checkpoint'] or '(使用隨機初始化)'}")
+print(f"資料來源: {CONFIG['data'] or '(使用隨機生成)'}")
+print(f"語言: {CONFIG['language']}")
+print(f"輸出目錄: {CONFIG['output_dir']}")
 
 
 # =============================================================================
-# 1. 基礎設定 - 創建模型和假資料
+# 1. 基礎設定 - 載入模型和資料
 # =============================================================================
+
+def load_model_from_checkpoint(checkpoint_path: str):
+    """
+    從 checkpoint 載入訓練好的模型
+
+    Args:
+        checkpoint_path: checkpoint 檔案路徑
+
+    Returns:
+        Tuple of (model, config)
+    """
+    from ml.ranking_v2 import RankingV2Config, CrossAttentionRanker
+
+    print(f"\n載入 checkpoint: {checkpoint_path}")
+
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+
+    # 取得 config
+    if 'config' in checkpoint:
+        config = checkpoint['config']
+        print(f"  從 checkpoint 載入 config")
+    elif 'hparams' in checkpoint:
+        config = RankingV2Config(**checkpoint['hparams'])
+        print(f"  從 hparams 重建 config")
+    else:
+        print(f"  警告: checkpoint 中沒有 config，使用預設值")
+        config = RankingV2Config()
+
+    # 建立模型
+    model = CrossAttentionRanker(config)
+
+    # 載入權重
+    if 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint)
+
+    model.to(device)
+    model.eval()
+
+    print(f"  模型參數量: {model.count_parameters():,}")
+    print(f"  模型載入成功!")
+
+    return model, config
+
+
+def load_data_from_file(data_path: str):
+    """
+    從檔案載入真實資料
+
+    Args:
+        data_path: .npz 檔案路徑
+
+    Returns:
+        資料字典
+    """
+    print(f"\n載入資料: {data_path}")
+
+    data = np.load(data_path)
+
+    # 解析 grid
+    if 'grid' in data:
+        grid = torch.from_numpy(data['grid']).float()
+    elif 'floor_plan' in data:
+        grid = torch.from_numpy(data['floor_plan']).float()
+    elif 'grid_a' in data:
+        # 已經是成對資料
+        return {
+            'grid_a': torch.from_numpy(data['grid_a']).float(),
+            'scenario_a': torch.from_numpy(data['scenario_a']).float(),
+            'grid_b': torch.from_numpy(data['grid_b']).float(),
+            'scenario_b': torch.from_numpy(data['scenario_b']).float(),
+            'labels': torch.from_numpy(data.get('labels', np.array([1]))).long(),
+        }
+    else:
+        raise ValueError(f"找不到 'grid' 或 'floor_plan' 在 {data_path}")
+
+    # 確保是 4D (batch, channels, H, W)
+    if grid.dim() == 3:
+        grid = grid.unsqueeze(0)
+
+    # 解析 scenario
+    if 'scenario' in data:
+        scenario = torch.from_numpy(data['scenario']).float()
+    else:
+        scenario = torch.tensor([[100.0, 1.0, 0.5, 30.0]])  # 預設值
+
+    if scenario.dim() == 1:
+        scenario = scenario.unsqueeze(0)
+
+    print(f"  Grid shape: {tuple(grid.shape)}")
+    print(f"  Scenario: agents={scenario[0,0]:.0f}, fires={scenario[0,1]:.0f}")
+
+    # 建立成對資料 (複製一份作為 B，實際應用時應該用不同配置)
+    return {
+        'grid_a': grid,
+        'scenario_a': scenario,
+        'grid_b': grid.clone(),  # 用相同資料作為示範
+        'scenario_b': scenario.clone(),
+        'labels': torch.tensor([1]),
+    }
+
+
 def create_demo_data(batch_size=4):
     """創建演示用的假資料"""
     H, W = 96, 128
@@ -41,9 +267,24 @@ def create_demo_data(batch_size=4):
     }
 
 
+def get_demo_data(batch_size=4):
+    """
+    取得示範資料 - 優先使用真實資料，否則用假資料
+
+    Returns:
+        資料字典
+    """
+    if CONFIG['data']:
+        return load_data_from_file(CONFIG['data'])
+    else:
+        return create_demo_data(batch_size)
+
+
 def demo_1_basic_model():
     """
     示範 1: 基礎模型使用
+
+    可以從 checkpoint 載入訓練好的模型，或創建新模型
     """
     print("\n" + "="*60)
     print("示範 1: 基礎 Ranking V2 模型")
@@ -51,24 +292,31 @@ def demo_1_basic_model():
 
     from ml.ranking_v2 import RankingV2Config, CrossAttentionRanker, get_full_config
 
-    # 方法 1: 使用預設配置
-    config = get_full_config()
+    # 根據配置決定載入方式
+    if CONFIG['checkpoint']:
+        # 從 checkpoint 載入訓練好的模型
+        model, config = load_model_from_checkpoint(CONFIG['checkpoint'])
+    else:
+        # 創建新模型 (隨機初始化)
+        print("\n建立新模型 (隨機權重)...")
 
-    # 方法 2: 自訂配置
-    config = RankingV2Config(
-        latent_dim=64,
-        use_cross_attention=True,
-        attention_heads=4,
-        mining_strategy="curriculum",
-        auxiliary_tasks=["survival_rate", "steps"],
-    )
+        # 方法 1: 使用預設配置
+        # config = get_full_config()
 
-    # 創建模型
-    model = CrossAttentionRanker(config).to(device)
-    print(f"模型參數量: {model.count_parameters():,}")
+        # 方法 2: 自訂配置
+        config = RankingV2Config(
+            latent_dim=64,
+            use_cross_attention=True,
+            attention_heads=4,
+            mining_strategy="curriculum",
+            auxiliary_tasks=["survival_rate", "steps"],
+        )
+
+        model = CrossAttentionRanker(config).to(device)
+        print(f"  模型參數量: {model.count_parameters():,}")
 
     # 準備資料
-    data = create_demo_data()
+    data = get_demo_data()
 
     # 前向傳播
     with torch.no_grad():
@@ -79,16 +327,17 @@ def demo_1_basic_model():
             data['scenario_b'].to(device),
         )
 
-    print(f"預測分數差 (logit): {outputs['logit']}")
-    print(f"配置 A 分數: {outputs['score_a']}")
-    print(f"配置 B 分數: {outputs['score_b']}")
+    print(f"\n預測結果:")
+    print(f"  分數差 (logit): {outputs['logit']}")
+    print(f"  配置 A 分數: {outputs['score_a']}")
+    print(f"  配置 B 分數: {outputs['score_b']}")
 
     # 單一配置評分
     single_score = model.score_single(
         data['grid_a'].to(device),
         data['scenario_a'].to(device),
     )
-    print(f"單一配置評分: {single_score}")
+    print(f"  單一配置評分: {single_score}")
 
     return model, config
 
@@ -619,47 +868,101 @@ def demo_10_contrastive_learning(config):
 # =============================================================================
 # 主程式
 # =============================================================================
+DEMO_REGISTRY = {
+    1: ("基礎模型", demo_1_basic_model),
+    2: ("不確定性量化", demo_2_uncertainty),
+    3: ("配置生成優化", demo_3_config_generation),
+    4: ("可解釋性報告", demo_4_explainability),
+    5: ("主動學習", demo_5_active_learning),
+    6: ("多目標排序", demo_6_multi_objective),
+    7: ("遷移學習", demo_7_transfer_learning),
+    8: ("持續學習", demo_8_continual_learning),
+    9: ("GNN 編碼器", demo_9_gnn_encoder),
+    10: ("對比學習預訓練", demo_10_contrastive_learning),
+}
+
+
+def list_demos():
+    """列出所有可用的示範"""
+    print("\n可用的示範:")
+    print("-" * 40)
+    for num, (name, _) in DEMO_REGISTRY.items():
+        print(f"  {num:2d}. {name}")
+    print("-" * 40)
+    print("\n使用方式:")
+    print("  # 執行特定示範")
+    print("  python -m ml.ranking_v2.examples.usage_guide --demos 1,4")
+    print()
+    print("  # 使用訓練好的模型")
+    print("  python -m ml.ranking_v2.examples.usage_guide -c model.pt --demos 4")
+    print()
+
+
 def main():
-    """執行所有示範"""
+    """執行示範"""
+    # 如果只是列出示範
+    if CONFIG['list_demos']:
+        list_demos()
+        return
+
     print("="*60)
     print("Ranking V2.1 完整使用指南")
     print("="*60)
 
-    # 1. 基礎模型
-    model, config = demo_1_basic_model()
+    # 決定要執行哪些示範
+    demos_to_run = CONFIG['demos'] or list(DEMO_REGISTRY.keys())
 
-    # 2. 不確定性量化
-    mc_model = demo_2_uncertainty(model)
+    print(f"\n將執行的示範: {demos_to_run}")
 
-    # 3. 配置生成
-    gen_result = demo_3_config_generation(model)
+    # 示範 1 是必須的（載入模型）
+    if 1 not in demos_to_run:
+        demos_to_run = [1] + demos_to_run
 
-    # 4. 可解釋性
-    report = demo_4_explainability(model, config)
+    model = None
+    config = None
+    results = {}
 
-    # 5. 主動學習
-    al_loop = demo_5_active_learning(model, config)
+    for demo_num in demos_to_run:
+        if demo_num not in DEMO_REGISTRY:
+            print(f"\n警告: 示範 {demo_num} 不存在，跳過")
+            continue
 
-    # 6. 多目標排序
-    mo_ranker = demo_6_multi_objective(config)
+        name, func = DEMO_REGISTRY[demo_num]
 
-    # 7. 遷移學習
-    extractor = demo_7_transfer_learning(model, config)
+        try:
+            # 根據示範編號決定參數
+            if demo_num == 1:
+                model, config = func()
+                results[demo_num] = (model, config)
+            elif demo_num == 2:
+                results[demo_num] = func(model)
+            elif demo_num == 3:
+                results[demo_num] = func(model)
+            elif demo_num == 4:
+                results[demo_num] = func(model, config)
+            elif demo_num == 5:
+                results[demo_num] = func(model, config)
+            elif demo_num == 6:
+                results[demo_num] = func(config)
+            elif demo_num == 7:
+                results[demo_num] = func(model, config)
+            elif demo_num == 8:
+                results[demo_num] = func(model, config)
+            elif demo_num == 9:
+                results[demo_num] = func(config)
+            elif demo_num == 10:
+                results[demo_num] = func(config)
 
-    # 8. 持續學習
-    learner = demo_8_continual_learning(model, config)
-
-    # 9. GNN 編碼器
-    gnn = demo_9_gnn_encoder(config)
-
-    # 10. 對比學習
-    simclr = demo_10_contrastive_learning(config)
+        except Exception as e:
+            print(f"\n錯誤: 示範 {demo_num} ({name}) 執行失敗: {e}")
+            import traceback
+            traceback.print_exc()
 
     print("\n" + "="*60)
-    print("所有示範完成！")
+    print("示範執行完成！")
     print("="*60)
 
-    print("\n📚 快速參考:")
+    print("\n快速參考:")
     print("  - 不確定性: MCDropoutWrapper, DeepEnsemble")
     print("  - 配置優化: EvolutionaryOptimizer, MCTSOptimizer")
     print("  - 解釋性: ExplanationPipeline")
@@ -669,6 +972,8 @@ def main():
     print("  - 持續學習: ContinualLearner, EWC")
     print("  - GNN: GNNEncoder, HybridEncoder")
     print("  - 預訓練: SimCLRModel, MoCoModel")
+
+    return results
 
 
 if __name__ == "__main__":

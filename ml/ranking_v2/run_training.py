@@ -884,8 +884,10 @@ def mode_visualize(args):
 
     # Create config from checkpoint
     config = RankingV2Config(**checkpoint['config'])
-    config.data_dir = args.data_dir
-    config.floor_plans_dir = args.floor_plans_dir
+    if args.data_dir is not None:
+        config.data_dir = args.data_dir
+    if args.floor_plans_dir is not None:
+        config.floor_plans_dir = args.floor_plans_dir
 
     # Load history
     history = checkpoint.get('history', {})

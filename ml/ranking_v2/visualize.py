@@ -552,3 +552,257 @@ def generate_gradcam_from_floor_plans(
 
         except Exception as e:
             print(f"Failed to generate GradCAM for {npz_path.name}: {e}")
+
+
+def apply_rotation(grid: torch.Tensor, k: int, target_size: Tuple[int, int]) -> torch.Tensor:
+    """
+    Apply 90-degree rotation k times and reposition to top-left.
+
+    Args:
+        grid: Grid tensor of shape (5, H, W)
+        k: Number of 90-degree counter-clockwise rotations (0-3)
+        target_size: (tH, tW) target size for output
+
+    Returns:
+        Rotated grid tensor of shape (5, tH, tW)
+    """
+    if k == 0:
+        return grid.clone()
+
+    tH, tW = target_size
+
+    # Apply rotation
+    rotated = torch.rot90(grid, k=k, dims=(1, 2))
+
+    # Create new grid with padding values
+    result = torch.full((5, tH, tW), -1.0, dtype=grid.dtype, device=grid.device)
+    result[4] = 0.0  # Valid mask padding is 0.0
+
+    # Find the valid content region
+    valid_mask = rotated[4]
+    valid_rows = (valid_mask > 0.5).any(dim=1).nonzero(as_tuple=True)[0]
+    valid_cols = (valid_mask > 0.5).any(dim=0).nonzero(as_tuple=True)[0]
+
+    if len(valid_rows) == 0 or len(valid_cols) == 0:
+        return result
+
+    # Get bounding box of valid content
+    min_row, max_row = valid_rows[0].item(), valid_rows[-1].item()
+    min_col, max_col = valid_cols[0].item(), valid_cols[-1].item()
+    content_h = max_row - min_row + 1
+    content_w = max_col - min_col + 1
+
+    # Crop if needed
+    copy_h = min(content_h, tH)
+    copy_w = min(content_w, tW)
+
+    # Copy to top-left
+    result[:, :copy_h, :copy_w] = rotated[
+        :,
+        min_row:min_row + copy_h,
+        min_col:min_col + copy_w
+    ]
+
+    return result
+
+
+def apply_shift(grid: torch.Tensor, shift_down: int, shift_right: int) -> torch.Tensor:
+    """
+    Apply shift augmentation to grid.
+
+    Args:
+        grid: Grid tensor of shape (5, H, W)
+        shift_down: Pixels to shift down (positive = down)
+        shift_right: Pixels to shift right (positive = right)
+
+    Returns:
+        Shifted grid tensor
+    """
+    _, tH, tW = grid.shape
+    shifted = torch.full_like(grid, -1.0)
+    shifted[4] = 0.0  # Valid mask
+
+    # Compute source region
+    src_h = tH - abs(shift_down)
+    src_w = tW - abs(shift_right)
+
+    if src_h <= 0 or src_w <= 0:
+        return shifted
+
+    # Handle negative shifts
+    src_row_start = max(0, -shift_down)
+    src_col_start = max(0, -shift_right)
+    dst_row_start = max(0, shift_down)
+    dst_col_start = max(0, shift_right)
+
+    shifted[:, dst_row_start:dst_row_start+src_h, dst_col_start:dst_col_start+src_w] = \
+        grid[:, src_row_start:src_row_start+src_h, src_col_start:src_col_start+src_w]
+
+    return shifted
+
+
+def visualize_augmentation_comparison(
+    model: CrossAttentionRanker,
+    sample: Dict,
+    output_path: Optional[str] = None,
+    device: torch.device = None,
+    shift_amounts: List[Tuple[int, int]] = None
+):
+    """
+    Visualize how model scores change under rotation and shift transformations.
+
+    Creates a comparison showing:
+    - Original floor plan with GradCAM and score
+    - Rotated versions (90°, 180°, 270°) with GradCAM and scores
+    - Shifted versions with GradCAM and scores
+
+    Args:
+        model: The ranking model
+        sample: Dataset sample with 'grid' and 'scenario'
+        output_path: Path to save the figure
+        device: Computation device
+        shift_amounts: List of (down, right) shift amounts to test
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib required for visualization")
+        return
+
+    if device is None:
+        device = next(model.parameters()).device
+
+    if shift_amounts is None:
+        shift_amounts = [(10, 0), (0, 10), (10, 10)]
+
+    grid = sample['grid'].to(device)
+    scenario = sample['scenario'].to(device)
+    target_size = grid.shape[-2:]
+
+    gradcam = GradCAM(model)
+    model.eval()
+
+    # Collect all transformations
+    transformations = []
+
+    # Original
+    transformations.append(('Original', grid.clone()))
+
+    # Rotations
+    for k in [1, 2, 3]:
+        angle = k * 90
+        rotated = apply_rotation(grid, k, target_size)
+        transformations.append((f'Rotate {angle}°', rotated))
+
+    # Shifts
+    for down, right in shift_amounts:
+        shifted = apply_shift(grid, down, right)
+        label = f'Shift ({down:+d}, {right:+d})'
+        transformations.append((label, shifted))
+
+    # Compute scores and GradCAMs
+    results = []
+    with torch.no_grad():
+        for label, g in transformations:
+            score = model.score_single(g.unsqueeze(0), scenario.unsqueeze(0))
+            cam = gradcam.generate(g, scenario)
+            results.append((label, g, score.item(), cam))
+
+    # Create figure
+    n_cols = len(results)
+    fig, axes = plt.subplots(3, n_cols, figsize=(4 * n_cols, 12))
+
+    for col, (label, g, score, cam) in enumerate(results):
+        floor_plan = g[1].cpu().numpy()
+
+        # Row 0: Floor plan
+        ax = axes[0, col]
+        ax.imshow(floor_plan, cmap='gray')
+        ax.set_title(f'{label}\nScore: {score:.4f}', fontsize=10)
+        ax.axis('off')
+
+        # Row 1: GradCAM
+        ax = axes[1, col]
+        ax.imshow(cam, cmap='jet')
+        ax.set_title('GradCAM', fontsize=10)
+        ax.axis('off')
+
+        # Row 2: Overlay
+        ax = axes[2, col]
+        ax.imshow(floor_plan, cmap='gray')
+        ax.imshow(cam, cmap='jet', alpha=0.5)
+        ax.set_title('Overlay', fontsize=10)
+        ax.axis('off')
+
+    # Add row labels
+    axes[0, 0].set_ylabel('Floor Plan', fontsize=12)
+    axes[1, 0].set_ylabel('GradCAM', fontsize=12)
+    axes[2, 0].set_ylabel('Overlay', fontsize=12)
+
+    # Add summary
+    original_score = results[0][2]
+    score_diffs = [abs(r[2] - original_score) for r in results[1:]]
+    avg_diff = np.mean(score_diffs)
+    max_diff = np.max(score_diffs)
+
+    fig.suptitle(
+        f'Augmentation Comparison | Avg Score Diff: {avg_diff:.4f} | Max Diff: {max_diff:.4f}',
+        fontsize=14, y=1.02
+    )
+
+    plt.tight_layout()
+
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        print(f"Saved augmentation comparison to {output_path}")
+    else:
+        plt.show()
+
+    plt.close()
+
+    return results
+
+
+def visualize_multiple_augmentation_samples(
+    model: CrossAttentionRanker,
+    dataset,
+    n_samples: int = 3,
+    output_dir: str = "viz_v2",
+    device: torch.device = None,
+    shift_amounts: List[Tuple[int, int]] = None
+):
+    """
+    Generate augmentation comparison visualizations for multiple samples.
+
+    Args:
+        model: The ranking model
+        dataset: Dataset to sample from
+        n_samples: Number of samples to visualize
+        output_dir: Output directory for figures
+        device: Computation device
+        shift_amounts: List of (down, right) shift amounts
+    """
+    if device is None:
+        device = next(model.parameters()).device
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    n_samples = min(n_samples, len(dataset))
+    indices = np.random.choice(len(dataset), n_samples, replace=False)
+
+    print(f"Generating augmentation comparisons for {n_samples} samples...")
+
+    for i, idx in enumerate(indices):
+        sample = dataset[idx]
+        save_path = str(output_path / f"augmentation_comparison_{i}.png")
+        visualize_augmentation_comparison(
+            model=model,
+            sample=sample,
+            output_path=save_path,
+            device=device,
+            shift_amounts=shift_amounts
+        )
+
+    print(f"Saved {n_samples} augmentation comparisons to {output_dir}")

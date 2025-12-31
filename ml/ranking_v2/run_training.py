@@ -35,6 +35,9 @@ Usage:
     # Visualize (includes attention maps and auxiliary predictions)
     python -m ml.ranking_v2.run_training --mode visualize --checkpoint checkpoints/ranking_v2/best_model.pt
 
+    # Visualize with augmentation comparison (shift + rotation)
+    python -m ml.ranking_v2.run_training --mode visualize --checkpoint checkpoints/ranking_v2/best_model.pt --augment-compare --augment-samples 5
+
 Example YAML config:
     # Data paths
     data_dir: combined_fast
@@ -102,7 +105,8 @@ from .visualize import (
     generate_all_visualizations,
     plot_training_history,
     visualize_gradcam_sample,
-    generate_gradcam_from_floor_plans
+    generate_gradcam_from_floor_plans,
+    visualize_multiple_augmentation_samples
 )
 
 
@@ -354,6 +358,21 @@ def parse_args():
         type=str,
         default='viz_v2',
         help="Output directory for visualizations"
+    )
+
+    # =====================
+    # Visualization arguments
+    # =====================
+    parser.add_argument(
+        '--augment-compare',
+        action='store_true',
+        help="Generate augmentation comparison visualizations (shift + rotation)"
+    )
+    parser.add_argument(
+        '--augment-samples',
+        type=int,
+        default=3,
+        help="Number of samples for augmentation comparison (default: 3)"
     )
 
     # =====================
@@ -955,6 +974,17 @@ def mode_visualize(args):
             n_samples=500,
             device=device
         )
+
+        # Augmentation comparison visualization
+        if args.augment_compare:
+            print("\nGenerating augmentation comparison visualizations...")
+            visualize_multiple_augmentation_samples(
+                model=model,
+                dataset=eval_dataset,
+                n_samples=args.augment_samples,
+                output_dir=output_dir,
+                device=device
+            )
     else:
         # Fallback: generate GradCAM directly from floor plan NPZ files
         print("\nGenerating GradCAM from floor plans (no simulation_results.jsonl)...")

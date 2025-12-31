@@ -467,12 +467,19 @@ def evaluate_on_explicit_pairs(
 
     logger.info(f"Loaded {len(pairs)} pairs from {pairs_file}")
 
-    # We'll use FireSimulationDataset's encoding functions
-    # Create a temporary dataset to access encoding methods
+    # Extract unique floor plan IDs from pairs
+    unique_fp_ids = set()
+    for pair in pairs:
+        unique_fp_ids.add(pair.floor_plan_id_a)
+        unique_fp_ids.add(pair.floor_plan_id_b)
+    
+    logger.info(f"Pairs involve {len(unique_fp_ids)} unique floor plans")
+
+    # Create dataset to load floor plans and access encoding methods
     temp_dataset = FireSimulationDataset(
         simulation_results_file=simulation_results_file,
         floor_plans_dir=floor_plans_dir,
-        floor_plan_ids=set(),  # Empty, we won't use it to load data
+        floor_plan_ids=unique_fp_ids,  # Only load floor plans that appear in pairs
         target_size=config.target_grid_size if config else 64,
         scenario_stats=scenario_stats,
         target_stats=None  # We don't need target normalization for prediction
@@ -489,25 +496,27 @@ def evaluate_on_explicit_pairs(
 
     with torch.no_grad():
         for pair in tqdm(pairs, desc="Evaluating pairs"):
+            # Get floor plan grids
+            floor_plan_a = temp_dataset.floor_plans.get(pair.floor_plan_id_a)
+            floor_plan_b = temp_dataset.floor_plans.get(pair.floor_plan_id_b)
+            
+            if floor_plan_a is None or floor_plan_b is None:
+                logger.warning(f"Skipping pair: floor plan {pair.floor_plan_id_a} or {pair.floor_plan_id_b} not found")
+                continue
+            
             # Encode configuration A
-            grid_a = temp_dataset.encode_floor_plan_with_config(
-                pair.floor_plan_id_a,
-                pair.config_a
-            )
-            scenario_a = temp_dataset.encode_scenario(pair.scenario_a)
+            grid_a = temp_dataset._encode_grid(floor_plan_a['grid'], pair.config_a)
+            scenario_a = temp_dataset._normalize_scenario(pair.scenario_a)
 
             # Encode configuration B
-            grid_b = temp_dataset.encode_floor_plan_with_config(
-                pair.floor_plan_id_b,
-                pair.config_b
-            )
-            scenario_b = temp_dataset.encode_scenario(pair.scenario_b)
+            grid_b = temp_dataset._encode_grid(floor_plan_b['grid'], pair.config_b)
+            scenario_b = temp_dataset._normalize_scenario(pair.scenario_b)
 
-            # Convert to tensors and add batch dimension
-            grid_a = torch.from_numpy(grid_a).unsqueeze(0).float().to(device)
-            scenario_a = torch.from_numpy(scenario_a).unsqueeze(0).float().to(device)
-            grid_b = torch.from_numpy(grid_b).unsqueeze(0).float().to(device)
-            scenario_b = torch.from_numpy(scenario_b).unsqueeze(0).float().to(device)
+            # Add batch dimension
+            grid_a = grid_a.unsqueeze(0).to(device)
+            scenario_a = scenario_a.unsqueeze(0).to(device)
+            grid_b = grid_b.unsqueeze(0).to(device)
+            scenario_b = scenario_b.unsqueeze(0).to(device)
 
             # Predict
             pred_a = model(grid_a, scenario_a).cpu().numpy()[0]

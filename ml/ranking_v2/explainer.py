@@ -271,8 +271,8 @@ class AttentionAnalyzer:
         scenario = scenario.unsqueeze(0).to(self.device)
 
         # Get Grad-CAM heatmap
-        heatmap = self.gradcam(grid, scenario)
-        heatmap = heatmap.squeeze().cpu().numpy()
+        heatmap = self.gradcam.generate(grid, scenario)
+        heatmap = heatmap.squeeze()
 
         # Identify hotspots (high attention regions)
         hotspots = self._find_hotspots(heatmap, grid.squeeze().cpu().numpy())

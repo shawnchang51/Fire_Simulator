@@ -619,7 +619,13 @@ def print_ranking_report(metrics: Dict, title: str = "Surrogate Model Ranking Ev
     if 'auc_roc' in metrics:
         print("\n AUC-ROC (Area Under ROC Curve):")
         print(f"   AUC-ROC:              {metrics['auc_roc']:.4f} ({metrics['auc_roc']*100:.2f}%)")
-        print(f"   Pairs evaluated:      {metrics['num_pairs_for_auc']}")
+        
+        # Only show num_pairs_for_auc in random sampling mode
+        if 'num_pairs_for_auc' in metrics:
+            print(f"   Pairs evaluated:      {metrics['num_pairs_for_auc']}")
+        elif 'total_pairs' in metrics:
+            print(f"   Pairs evaluated:      {metrics['total_pairs']}")
+            
         print(f"   Interpretation:       Probability model correctly ranks random pair")
 
     # Correlation metrics

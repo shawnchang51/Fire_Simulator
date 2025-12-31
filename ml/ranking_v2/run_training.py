@@ -417,7 +417,7 @@ def save_config_to_yaml(
         'attention_dim': config.attention_dim,
         'num_attention_layers': config.num_attention_layers,
         'attention_dropout': config.attention_dropout,
-        'use_ffn_in_attention': config.use_ffn_in_attention,
+        'use_attention_ffn': config.use_attention_ffn,
 
         # V2: Hard Negative Mining
         'mining_strategy': config.mining_strategy,
@@ -527,7 +527,7 @@ def create_config_from_args(args) -> RankingV2Config:
             'scoring_hidden_dim', 'scoring_num_layers', 'use_layer_norm', 'dropout',
             # V2 fields
             'use_cross_attention', 'attention_heads', 'attention_dim',
-            'num_attention_layers', 'attention_dropout', 'use_ffn_in_attention',
+            'num_attention_layers', 'attention_dropout', 'use_attention_ffn',
             'mining_strategy', 'hard_negative_ratio', 'margin_threshold',
             'curriculum_warmup_epochs', 'mining_refresh_interval',
             'auxiliary_tasks', 'aux_loss_weight', 'aux_hidden_dim',

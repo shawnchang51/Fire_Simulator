@@ -20,6 +20,7 @@ server_results/
 training_data_v5_combined/
 checkpoints*/
 logs/
+!ml/ranking_v2/configs
 
 # Virtual environments
 venv/

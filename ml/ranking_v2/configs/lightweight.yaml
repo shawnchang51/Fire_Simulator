@@ -1,0 +1,64 @@
+# Ranking V2 - Lightweight Configuration
+# Minimal config for quick testing and debugging
+#
+# Usage: python -m ml.ranking_v2.run_training --mode train --config ml/ranking_v2/configs/lightweight.yaml
+
+# Data paths
+data_dir: combined_fast
+floor_plans_dir: combined_fast/floor_plans
+target_grid_size: [96, 128]
+
+# Grid encoding
+num_grid_channels: 5
+
+# CNN Encoder (smaller)
+cnn_channels: [16, 32, 64]
+latent_dim: 32
+use_residual: false
+
+# Scenario MLP
+scenario_input_dim: 4
+scenario_hidden_dim: 32
+scenario_output_dim: 16
+
+# Scoring Head (smaller)
+scoring_hidden_dim: 32
+scoring_num_layers: 2
+use_layer_norm: false
+dropout: 0.2
+
+# V2: Cross-Attention (DISABLED for speed)
+use_cross_attention: false
+
+# V2: Hard Negative Mining (DISABLED for simplicity)
+mining_strategy: none
+
+# V2: Auxiliary Tasks (DISABLED for speed)
+auxiliary_tasks: []
+
+# Loss function
+loss_type: ranknet
+margin: 0.1
+sigma: 1.0
+
+# Regularization
+l1_lambda: 0.001
+weight_decay: 0.0001
+
+# Training (fewer epochs for testing)
+batch_size: 64
+learning_rate: 0.001
+warmup_epochs: 2
+epochs: 20
+early_stopping_patience: 5
+num_workers: 4
+
+# Checkpoint and logging
+checkpoint_dir: checkpoints/ranking_v2_test
+log_dir: logs/ranking_v2_test
+
+# Reproducibility
+seed: 42
+
+# Data Augmentation
+augment_shift: false

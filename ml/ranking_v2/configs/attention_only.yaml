@@ -1,0 +1,70 @@
+# Ranking V2 - Attention Only Configuration
+# Cross-Attention enabled, no Hard Negative Mining or Auxiliary Tasks
+#
+# Usage: python -m ml.ranking_v2.run_training --mode train --config ml/ranking_v2/configs/attention_only.yaml
+
+# Data paths
+data_dir: combined_fast
+floor_plans_dir: combined_fast/floor_plans
+target_grid_size: [96, 128]
+
+# Grid encoding
+num_grid_channels: 5
+
+# CNN Encoder
+cnn_channels: [32, 64, 128]
+latent_dim: 64
+use_residual: true
+
+# Scenario MLP
+scenario_input_dim: 4
+scenario_hidden_dim: 64
+scenario_output_dim: 32
+
+# Scoring Head
+scoring_hidden_dim: 64
+scoring_num_layers: 3
+use_layer_norm: true
+dropout: 0.3
+
+# V2: Cross-Attention (ENABLED)
+use_cross_attention: true
+attention_heads: 4
+attention_dim: 64
+num_attention_layers: 2
+attention_dropout: 0.1
+use_ffn_in_attention: true
+
+# V2: Hard Negative Mining (DISABLED)
+mining_strategy: none
+
+# V2: Auxiliary Tasks (DISABLED)
+auxiliary_tasks: []
+
+# Loss function
+loss_type: ranknet
+margin: 0.1
+sigma: 1.0
+label_smoothing: 0.05
+
+# Regularization
+l1_lambda: 0.001
+weight_decay: 0.0001
+
+# Training
+batch_size: 128
+learning_rate: 0.001
+warmup_epochs: 5
+epochs: 100
+early_stopping_patience: 15
+num_workers: 16
+
+# Checkpoint and logging
+checkpoint_dir: checkpoints/ranking_v2_attention
+log_dir: logs/ranking_v2_attention
+
+# Reproducibility
+seed: 42
+
+# Data Augmentation
+augment_shift: true

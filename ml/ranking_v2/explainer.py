@@ -141,8 +141,9 @@ class FeatureAttributor:
             interp_grid = baseline_grid + alpha * (grid - baseline_grid)
             interp_scenario = baseline_scenario + alpha * (scenario - baseline_scenario)
 
-            interp_grid.requires_grad = True
-            interp_scenario.requires_grad = True
+            # Detach and set requires_grad to make them leaf tensors
+            interp_grid = interp_grid.detach().requires_grad_(True)
+            interp_scenario = interp_scenario.detach().requires_grad_(True)
 
             # Forward pass
             if target == "score":

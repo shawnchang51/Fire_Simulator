@@ -424,7 +424,7 @@ def save_config_to_yaml(
         'hard_negative_ratio': config.hard_negative_ratio,
         'margin_threshold': config.margin_threshold,
         'curriculum_warmup_epochs': config.curriculum_warmup_epochs,
-        'mining_refresh_interval': config.mining_refresh_interval,
+        'mining_refresh_epochs': config.mining_refresh_epochs,
 
         # V2: Auxiliary Tasks
         'auxiliary_tasks': config.auxiliary_tasks,
@@ -529,7 +529,7 @@ def create_config_from_args(args) -> RankingV2Config:
             'use_cross_attention', 'attention_heads', 'attention_dim',
             'num_attention_layers', 'attention_dropout', 'use_attention_ffn',
             'mining_strategy', 'hard_negative_ratio', 'margin_threshold',
-            'curriculum_warmup_epochs', 'mining_refresh_interval',
+            'curriculum_warmup_epochs', 'mining_refresh_epochs',
             'auxiliary_tasks', 'aux_loss_weight', 'aux_hidden_dim',
             'aux_loss_schedule', 'aux_survival_weight', 'aux_steps_weight',
             'aux_fire_damage_weight',

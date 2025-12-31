@@ -430,14 +430,15 @@ def evaluate_per_plan_ranking(
     }
 
 
-def evaluate_on_pairs_file(
+def evaluate_on_explicit_pairs(
     model: nn.Module,
     pairs_file: str,
     simulation_results_file: str,
     floor_plans_dir: str,
     device: torch.device,
     target_stats: Optional[Dict] = None,
-    config: Optional[ModelConfig] = None
+    config: Optional[ModelConfig] = None,
+    scenario_stats: Optional[Dict] = None
 ) -> Dict:
     """
     Evaluate model on explicit pairwise labels from a pairs file.
@@ -445,15 +446,19 @@ def evaluate_on_pairs_file(
     Args:
         model: Trained surrogate model
         pairs_file: Path to pairs.jsonl file
-        simulation_results_file: Path to simulation_results.jsonl
+        simulation_results_file: Path to simulation_results.jsonl (not used, kept for compatibility)
         floor_plans_dir: Path to floor_plans/ directory
         device: Device to run on
         target_stats: Denormalization statistics
         config: Model config
+        scenario_stats: Scenario normalization statistics
 
     Returns:
         Dict with evaluation metrics
     """
+    from ml.surrogate.dataset import FireSimulationDataset
+    from tqdm import tqdm
+
     # Load pairs
     pairs = []
     with open(pairs_file, 'r') as f:
@@ -462,18 +467,92 @@ def evaluate_on_pairs_file(
 
     logger.info(f"Loaded {len(pairs)} pairs from {pairs_file}")
 
-    # Build a lookup of simulation results
-    # We need to predict for each unique (floor_plan_id, config, scenario)
-    # This is complex, so for simplicity, let's just evaluate pairwise accuracy
-    # by predicting both A and B for each pair
-
-    # Actually, this is tricky because we need to encode each config on-the-fly
-    # For now, let's skip this and recommend using the simpler approach
-
-    raise NotImplementedError(
-        "Evaluating on explicit pairs requires encoding configs on-the-fly. "
-        "Use the main evaluation approach instead."
+    # We'll use FireSimulationDataset's encoding functions
+    # Create a temporary dataset to access encoding methods
+    temp_dataset = FireSimulationDataset(
+        simulation_results_file=simulation_results_file,
+        floor_plans_dir=floor_plans_dir,
+        floor_plan_ids=set(),  # Empty, we won't use it to load data
+        target_size=config.target_grid_size if config else 64,
+        scenario_stats=scenario_stats,
+        target_stats=None  # We don't need target normalization for prediction
     )
+
+    model = model.to(device)
+    model.eval()
+
+    correct = 0
+    total = 0
+    labels = []
+    score_diffs = []
+    confidence_sum = 0.0
+
+    with torch.no_grad():
+        for pair in tqdm(pairs, desc="Evaluating pairs"):
+            # Encode configuration A
+            grid_a = temp_dataset.encode_floor_plan_with_config(
+                pair.floor_plan_id_a,
+                pair.config_a
+            )
+            scenario_a = temp_dataset.encode_scenario(pair.scenario_a)
+
+            # Encode configuration B
+            grid_b = temp_dataset.encode_floor_plan_with_config(
+                pair.floor_plan_id_b,
+                pair.config_b
+            )
+            scenario_b = temp_dataset.encode_scenario(pair.scenario_b)
+
+            # Convert to tensors and add batch dimension
+            grid_a = torch.from_numpy(grid_a).unsqueeze(0).float().to(device)
+            scenario_a = torch.from_numpy(scenario_a).unsqueeze(0).float().to(device)
+            grid_b = torch.from_numpy(grid_b).unsqueeze(0).float().to(device)
+            scenario_b = torch.from_numpy(scenario_b).unsqueeze(0).float().to(device)
+
+            # Predict
+            pred_a = model(grid_a, scenario_a).cpu().numpy()[0]
+            pred_b = model(grid_b, scenario_b).cpu().numpy()[0]
+
+            # Denormalize if needed
+            if target_stats is not None:
+                means = np.array(target_stats['means'])
+                stds = np.array(target_stats['stds'])
+                pred_a = pred_a * stds + means
+                pred_b = pred_b * stds + means
+
+            # Compute scores
+            score_a = compute_score_from_predictions(pred_a[0], pred_a[1], pred_a[2], pred_a[3])
+            score_b = compute_score_from_predictions(pred_b[0], pred_b[1], pred_b[2], pred_b[3])
+
+            # Determine predicted label (1 if A > B, 0 if B > A)
+            pred_label = 1 if score_a > score_b else 0
+
+            # Compare with ground truth
+            if pred_label == pair.label:
+                correct += 1
+
+            total += 1
+            labels.append(pair.label)
+            score_diffs.append(score_a - score_b)
+            confidence_sum += pair.label_confidence
+
+    accuracy = correct / total if total > 0 else 0
+
+    # Compute AUC-ROC
+    auc = 0.0
+    try:
+        from sklearn.metrics import roc_auc_score
+        auc = roc_auc_score(labels, score_diffs)
+    except Exception as e:
+        logger.warning(f"Could not compute AUC-ROC: {e}")
+
+    return {
+        'pairwise_accuracy': accuracy,
+        'total_pairs': total,
+        'correct_pairs': correct,
+        'auc_roc': float(auc),
+        'avg_confidence': float(confidence_sum / total) if total > 0 else 0
+    }
 
 
 def print_ranking_report(metrics: Dict, title: str = "Surrogate Model Ranking Evaluation"):
@@ -525,15 +604,19 @@ def main():
     parser.add_argument('--floor_plans_dir', type=str, default=None,
                         help='Path to floor_plans directory (default: data_dir/floor_plans)')
     parser.add_argument('--num_pairs', type=int, default=10000,
-                        help='Number of pairs to evaluate for pairwise accuracy')
+                        help='Number of pairs to evaluate for pairwise accuracy (only used without --use_explicit_pairs)')
     parser.add_argument('--margin', type=float, default=0.002,
-                        help='Minimum score difference for valid pairs')
+                        help='Minimum score difference for valid pairs (only used without --use_explicit_pairs)')
     parser.add_argument('--top_k', type=int, default=10,
                         help='Top-K for per-plan evaluation')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Device to run on')
     parser.add_argument('--output', type=str, default=None,
                         help='Output file for metrics (default: save to checkpoint directory)')
+    parser.add_argument('--use_explicit_pairs', action='store_true',
+                        help='Use explicit pairs from test_pairs.jsonl instead of random sampling')
+    parser.add_argument('--pairs_file', type=str, default=None,
+                        help='Path to pairs file (default: data_dir/test_pairs.jsonl)')
 
     args = parser.parse_args()
 
@@ -556,80 +639,106 @@ def main():
 
     # Get target stats from checkpoint
     target_stats = checkpoint.get('target_stats', None)
+    scenario_stats = checkpoint.get('scenario_stats', None)
 
-    # Load test data
-    test_fp_ids = get_floor_plan_ids_from_pairs(str(data_dir / "test_pairs.jsonl"))
-    logger.info(f"Test set has {len(test_fp_ids)} floor plans")
+    # Determine pairs file
+    pairs_file = args.pairs_file or str(data_dir / "test_pairs.jsonl")
 
-    test_dataset = FireSimulationDataset(
-        simulation_results_file=str(data_dir / "simulation_results.jsonl"),
-        floor_plans_dir=floor_plans_dir,
-        floor_plan_ids=test_fp_ids,
-        target_size=config.target_grid_size,
-        scenario_stats=checkpoint.get('scenario_stats', None),
-        target_stats=target_stats
-    )
+    if args.use_explicit_pairs:
+        # Use explicit pairs from test_pairs.jsonl
+        logger.info(f"Using explicit pairs from {pairs_file}")
+        
+        pairwise_metrics = evaluate_on_explicit_pairs(
+            model=model,
+            pairs_file=pairs_file,
+            simulation_results_file=str(data_dir / "simulation_results.jsonl"),
+            floor_plans_dir=floor_plans_dir,
+            device=device,
+            target_stats=target_stats,
+            config=config,
+            scenario_stats=scenario_stats
+        )
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=0,  # Single-threaded for simplicity
-        pin_memory=False
-    )
+        # For explicit pairs mode, we don't compute other metrics
+        all_metrics = pairwise_metrics
 
-    logger.info(f"Test dataset has {len(test_dataset)} samples")
+    else:
+        # Use random sampling approach (original behavior)
+        logger.info("Using random sampling approach")
+        
+        # Load test data
+        test_fp_ids = get_floor_plan_ids_from_pairs(pairs_file)
+        logger.info(f"Test set has {len(test_fp_ids)} floor plans")
 
-    # Predict scores
-    logger.info("Predicting scores for all test samples...")
-    predicted_scores, ground_truth_scores, predictions = predict_all_scores(
-        model, test_loader, device, target_stats
-    )
+        test_dataset = FireSimulationDataset(
+            simulation_results_file=str(data_dir / "simulation_results.jsonl"),
+            floor_plans_dir=floor_plans_dir,
+            floor_plan_ids=test_fp_ids,
+            target_size=config.target_grid_size,
+            scenario_stats=scenario_stats,
+            target_stats=target_stats
+        )
 
-    # Extract floor plan IDs from test dataset
-    floor_plan_ids = [record['floor_plan_id'] for record in test_dataset.records]
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=config.batch_size,
+            shuffle=False,
+            num_workers=0,  # Single-threaded for simplicity
+            pin_memory=False
+        )
 
-    # Evaluate pairwise ranking
-    logger.info(f"Evaluating pairwise ranking on {args.num_pairs} random pairs...")
-    pairwise_metrics = evaluate_pairwise_ranking(
-        predicted_scores,
-        ground_truth_scores,
-        num_pairs=args.num_pairs,
-        margin=args.margin
-    )
+        logger.info(f"Test dataset has {len(test_dataset)} samples")
 
-    # Evaluate AUC-ROC
-    logger.info(f"Computing AUC-ROC on {args.num_pairs} random pairs...")
-    auc_metrics = evaluate_auc_roc(
-        predicted_scores,
-        ground_truth_scores,
-        num_pairs=args.num_pairs,
-        margin=args.margin
-    )
+        # Predict scores
+        logger.info("Predicting scores for all test samples...")
+        predicted_scores, ground_truth_scores, predictions = predict_all_scores(
+            model, test_loader, device, target_stats
+        )
 
-    # Evaluate ranking correlations
-    logger.info("Computing ranking correlations...")
-    correlation_metrics = evaluate_ranking_correlations(
-        predicted_scores,
-        ground_truth_scores
-    )
+        # Extract floor plan IDs from test dataset
+        floor_plan_ids = [record['floor_plan_id'] for record in test_dataset.records]
 
-    # Evaluate per-plan ranking
-    logger.info("Evaluating per-plan ranking...")
-    per_plan_metrics = evaluate_per_plan_ranking(
-        predicted_scores,
-        ground_truth_scores,
-        floor_plan_ids,
-        top_k=args.top_k
-    )
+        # Evaluate pairwise ranking
+        logger.info(f"Evaluating pairwise ranking on {args.num_pairs} random pairs...")
+        pairwise_metrics = evaluate_pairwise_ranking(
+            predicted_scores,
+            ground_truth_scores,
+            num_pairs=args.num_pairs,
+            margin=args.margin
+        )
 
-    # Combine all metrics
-    all_metrics = {
-        **pairwise_metrics,
-        **auc_metrics,
-        **correlation_metrics,
-        **per_plan_metrics
-    }
+        # Evaluate AUC-ROC
+        logger.info(f"Computing AUC-ROC on {args.num_pairs} random pairs...")
+        auc_metrics = evaluate_auc_roc(
+            predicted_scores,
+            ground_truth_scores,
+            num_pairs=args.num_pairs,
+            margin=args.margin
+        )
+
+        # Evaluate ranking correlations
+        logger.info("Computing ranking correlations...")
+        correlation_metrics = evaluate_ranking_correlations(
+            predicted_scores,
+            ground_truth_scores
+        )
+
+        # Evaluate per-plan ranking
+        logger.info("Evaluating per-plan ranking...")
+        per_plan_metrics = evaluate_per_plan_ranking(
+            predicted_scores,
+            ground_truth_scores,
+            floor_plan_ids,
+            top_k=args.top_k
+        )
+
+        # Combine all metrics
+        all_metrics = {
+            **pairwise_metrics,
+            **auc_metrics,
+            **correlation_metrics,
+            **per_plan_metrics
+        }
 
     # Add model architecture information
     all_metrics['model_info'] = {
@@ -645,17 +754,18 @@ def main():
         'dropout': config.dropout
     }
 
-    # Add score statistics
-    all_metrics['score_statistics'] = {
-        'predicted_mean': float(np.mean(predicted_scores)),
-        'predicted_std': float(np.std(predicted_scores)),
-        'predicted_min': float(np.min(predicted_scores)),
-        'predicted_max': float(np.max(predicted_scores)),
-        'ground_truth_mean': float(np.mean(ground_truth_scores)),
-        'ground_truth_std': float(np.std(ground_truth_scores)),
-        'ground_truth_min': float(np.min(ground_truth_scores)),
-        'ground_truth_max': float(np.max(ground_truth_scores)),
-    }
+    # Add score statistics (only in random sampling mode)
+    if not args.use_explicit_pairs:
+        all_metrics['score_statistics'] = {
+            'predicted_mean': float(np.mean(predicted_scores)),
+            'predicted_std': float(np.std(predicted_scores)),
+            'predicted_min': float(np.min(predicted_scores)),
+            'predicted_max': float(np.max(predicted_scores)),
+            'ground_truth_mean': float(np.mean(ground_truth_scores)),
+            'ground_truth_std': float(np.std(ground_truth_scores)),
+            'ground_truth_min': float(np.min(ground_truth_scores)),
+            'ground_truth_max': float(np.max(ground_truth_scores)),
+        }
 
     # Print report
     print_ranking_report(all_metrics)
@@ -681,16 +791,17 @@ def main():
         json.dump(convert_to_native(all_metrics), f, indent=2)
     logger.info(f"Metrics saved to {output_path}")
 
-    # Additional analysis: show score distribution comparison
-    print("\n SCORE DISTRIBUTION:")
-    print(f"   Predicted:     μ={all_metrics['score_statistics']['predicted_mean']:.4f}, "
-          f"σ={all_metrics['score_statistics']['predicted_std']:.4f}, "
-          f"range=[{all_metrics['score_statistics']['predicted_min']:.4f}, "
-          f"{all_metrics['score_statistics']['predicted_max']:.4f}]")
-    print(f"   Ground Truth:  μ={all_metrics['score_statistics']['ground_truth_mean']:.4f}, "
-          f"σ={all_metrics['score_statistics']['ground_truth_std']:.4f}, "
-          f"range=[{all_metrics['score_statistics']['ground_truth_min']:.4f}, "
-          f"{all_metrics['score_statistics']['ground_truth_max']:.4f}]")
+    # Additional analysis: show score distribution comparison (only in random sampling mode)
+    if not args.use_explicit_pairs:
+        print("\n SCORE DISTRIBUTION:")
+        print(f"   Predicted:     μ={all_metrics['score_statistics']['predicted_mean']:.4f}, "
+              f"σ={all_metrics['score_statistics']['predicted_std']:.4f}, "
+              f"range=[{all_metrics['score_statistics']['predicted_min']:.4f}, "
+              f"{all_metrics['score_statistics']['predicted_max']:.4f}]")
+        print(f"   Ground Truth:  μ={all_metrics['score_statistics']['ground_truth_mean']:.4f}, "
+              f"σ={all_metrics['score_statistics']['ground_truth_std']:.4f}, "
+              f"range=[{all_metrics['score_statistics']['ground_truth_min']:.4f}, "
+              f"{all_metrics['score_statistics']['ground_truth_max']:.4f}]")
 
     # Show model architecture summary
     print("\n MODEL ARCHITECTURE:")

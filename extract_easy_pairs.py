@@ -295,15 +295,11 @@ Examples:
 def main():
     args = parse_args()
 
-    # Set up paths
-    input_dir = Path(args.input_dir)
-    if not input_dir.is_absolute():
-        input_dir = Path('c:/dev/Fire_Simulator') / input_dir
+    # Set up paths - resolve relative to current working directory
+    input_dir = Path(args.input_dir).resolve()
 
     if args.output_dir:
-        output_dir = Path(args.output_dir)
-        if not output_dir.is_absolute():
-            output_dir = Path('c:/dev/Fire_Simulator') / output_dir
+        output_dir = Path(args.output_dir).resolve()
     else:
         output_dir = input_dir.parent / f"{input_dir.name}_{args.difficulty}"
 

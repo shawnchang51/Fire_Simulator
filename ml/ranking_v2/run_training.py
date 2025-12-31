@@ -897,8 +897,7 @@ def mode_visualize(args):
             simulation_results_file=str(data_dir / "simulation_results.jsonl"),
             floor_plans_dir=config.floor_plans_dir,
             target_size=config.target_grid_size,
-            max_configs=2000,
-            include_auxiliary=True
+            max_configs=2000
         )
         print(f"  Loaded {len(eval_dataset):,} configs")
     except Exception as e:

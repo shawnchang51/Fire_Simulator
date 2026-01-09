@@ -47,9 +47,14 @@ def compute_metrics(
         mae = mean_absolute_error(t, p)
         r2 = r2_score(t, p)
 
-        # Correlation coefficients
-        pearson_r, pearson_p = pearsonr(t, p)
-        spearman_r, spearman_p = spearmanr(t, p)
+        # Correlation coefficients (check for constant arrays)
+        if np.std(t) == 0 or np.std(p) == 0:
+            # Cannot compute correlation for constant arrays
+            pearson_r, pearson_p = np.nan, np.nan
+            spearman_r, spearman_p = np.nan, np.nan
+        else:
+            pearson_r, pearson_p = pearsonr(t, p)
+            spearman_r, spearman_p = spearmanr(t, p)
 
         results[name] = {
             'mse': float(mse),
@@ -62,12 +67,12 @@ def compute_metrics(
             'spearman_p': float(spearman_p)
         }
 
-    # Overall metrics (mean across outputs)
+    # Overall metrics (mean across outputs, ignoring NaN)
     overall_mse = np.mean([results[name]['mse'] for name in output_names[:num_outputs]])
     overall_rmse = np.mean([results[name]['rmse'] for name in output_names[:num_outputs]])
     overall_mae = np.mean([results[name]['mae'] for name in output_names[:num_outputs]])
     overall_r2 = np.mean([results[name]['r2'] for name in output_names[:num_outputs]])
-    overall_pearson = np.mean([results[name]['pearson_r'] for name in output_names[:num_outputs]])
+    overall_pearson = np.nanmean([results[name]['pearson_r'] for name in output_names[:num_outputs]])
 
     results['overall'] = {
         'overall_mean_loss': float(overall_mse),

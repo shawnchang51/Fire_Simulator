@@ -102,7 +102,8 @@ def evaluate_per_plan_ranking(
     model: CrossAttentionRanker,
     eval_dataset: SingleConfigDataset,
     device: torch.device = None,
-    batch_size: int = 256
+    batch_size: int = 256,
+    num_workers: int = 0
 ) -> Dict[str, float]:
     """
     Evaluate per-plan ranking metrics using RAW scores.
@@ -117,6 +118,7 @@ def evaluate_per_plan_ranking(
         eval_dataset: SingleConfigDataset with all configs
         device: Device to evaluate on
         batch_size: Batch size for scoring
+        num_workers: Number of workers for data loading
 
     Returns:
         Dict with ranking metrics
@@ -126,35 +128,41 @@ def evaluate_per_plan_ranking(
 
     model.eval()
 
-    # Batch score all configs at once, then group by plan
-    all_grids = []
-    all_scenarios = []
-    all_plan_ids = []
-    all_true_scores = []
+    # Use DataLoader for efficient batched loading
+    eval_loader = DataLoader(
+        eval_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True if device.type == 'cuda' else False
+    )
 
-    for i in range(len(eval_dataset)):
-        item = eval_dataset[i]
-        all_grids.append(item['grid'])
-        all_scenarios.append(item['scenario'])
-        all_plan_ids.append(item['floor_plan_id'])
-        all_true_scores.append(item['ground_truth_score'])
-
-    # Batch forward pass
+    # Collect predictions and ground truth
     all_pred_scores = []
-    num_samples = len(all_grids)
+    all_true_scores = []
+    all_plan_ids = []
 
-    for start_idx in tqdm(range(0, num_samples, batch_size), desc="Scoring configs"):
-        end_idx = min(start_idx + batch_size, num_samples)
+    for batch in tqdm(eval_loader, desc="Scoring configs"):
+        grids = batch['grid'].to(device)
+        scenarios = batch['scenario'].to(device)
 
-        grids = torch.stack(all_grids[start_idx:end_idx]).to(device)
-        scenarios = torch.stack(all_scenarios[start_idx:end_idx]).to(device)
-
+        # Forward pass
         scores = model.score_single(grids, scenarios)
+
+        # Collect results
         all_pred_scores.extend(scores.cpu().numpy())
+        all_true_scores.extend(batch['ground_truth_score'].numpy())
+        all_plan_ids.extend(batch['floor_plan_id'].numpy())
 
     all_pred_scores = np.array(all_pred_scores)
+    all_true_scores = np.array(all_true_scores)
 
-    # Group by plan_id
+    # Compute overall correlations (across all configs)
+    overall_kendall_tau, _ = kendalltau(all_pred_scores, all_true_scores)
+    overall_spearman_r, _ = spearmanr(all_pred_scores, all_true_scores)
+    overall_pearson_r = np.corrcoef(all_pred_scores, all_true_scores)[0, 1]
+
+    # Group by plan_id for per-plan metrics
     plan_preds = defaultdict(list)
     plan_trues = defaultdict(list)
     for i, plan_id in enumerate(all_plan_ids):
@@ -196,12 +204,21 @@ def evaluate_per_plan_ranking(
             top1_correct += 1
 
     return {
-        'mean_kendall_tau': float(np.mean(tau_scores)) if tau_scores else 0.0,
-        'std_kendall_tau': float(np.std(tau_scores)) if tau_scores else 0.0,
-        'mean_spearman_rho': float(np.mean(rho_scores)) if rho_scores else 0.0,
-        'std_spearman_rho': float(np.std(rho_scores)) if rho_scores else 0.0,
-        'mean_ndcg@5': float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,
-        'std_ndcg@5': float(np.std(ndcg_scores)) if ndcg_scores else 0.0,
+        # Overall correlations (what the notebook expects)
+        'kendall_tau': float(overall_kendall_tau) if not np.isnan(overall_kendall_tau) else 0.0,
+        'spearman_r': float(overall_spearman_r) if not np.isnan(overall_spearman_r) else 0.0,
+        'pearson_r': float(overall_pearson_r) if not np.isnan(overall_pearson_r) else 0.0,
+
+        # Per-plan statistics
+        'mean_per_plan_kendall': float(np.mean(tau_scores)) if tau_scores else 0.0,
+        'std_per_plan_kendall': float(np.std(tau_scores)) if tau_scores else 0.0,
+        'per_plan_kendall': tau_scores,  # For histogram plotting
+        'mean_per_plan_spearman': float(np.mean(rho_scores)) if rho_scores else 0.0,
+        'std_per_plan_spearman': float(np.std(rho_scores)) if rho_scores else 0.0,
+        'per_plan_spearman': rho_scores,  # For histogram plotting
+
+        # Other metrics
+        'ndcg_at_10': float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,  # Renamed from mean_ndcg@5
         'top1_accuracy': float(top1_correct / num_plans) if num_plans > 0 else 0.0,
         'num_plans': num_plans,
         'num_configs': len(all_pred_scores)
@@ -213,7 +230,8 @@ def evaluate_auxiliary(
     model: CrossAttentionRanker,
     eval_dataset: SingleConfigDataset,
     device: torch.device = None,
-    batch_size: int = 256
+    batch_size: int = 256,
+    num_workers: int = 0
 ) -> Dict[str, float]:
     """
     Evaluate auxiliary task predictions.
@@ -223,37 +241,41 @@ def evaluate_auxiliary(
         eval_dataset: SingleConfigDataset with ground truth metrics
         device: Device to evaluate on
         batch_size: Batch size for inference
+        num_workers: Number of workers for data loading
 
     Returns:
-        Dict with MAE, RMSE for each auxiliary task
+        Dict with MAE, RMSE, R² for each auxiliary task
     """
     if device is None:
         device = next(model.parameters()).device
 
     model.eval()
 
+    # Use DataLoader for efficient batched loading
+    eval_loader = DataLoader(
+        eval_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True if device.type == 'cuda' else False
+    )
+
     task_predictions = defaultdict(list)
     task_targets = defaultdict(list)
 
     # Batch inference
-    for start_idx in tqdm(range(0, len(eval_dataset), batch_size), desc="Evaluating auxiliary"):
-        end_idx = min(start_idx + batch_size, len(eval_dataset))
+    for batch in tqdm(eval_loader, desc="Evaluating auxiliary"):
+        grids = batch['grid'].to(device)
 
-        grids = []
-        for i in range(start_idx, end_idx):
-            item = eval_dataset[i]
-            grids.append(item['grid'])
-
-            # Collect targets
-            for task in ['survival_rate', 'steps', 'avg_fire_damage']:
-                if task in item:
-                    task_targets[task].append(item[task])
-
-        grids = torch.stack(grids).to(device)
+        # Get predictions from model
         predictions = model.predict_auxiliary(grids)
 
-        for task, preds in predictions.items():
-            task_predictions[task].extend(preds.cpu().numpy())
+        # Collect predictions and targets
+        for task in ['survival_rate', 'steps', 'avg_fire_damage']:
+            if task in predictions:
+                task_predictions[task].extend(predictions[task].cpu().numpy())
+            if task in batch:
+                task_targets[task].extend(batch[task].numpy())
 
     # Compute metrics
     metrics = {}
@@ -269,14 +291,20 @@ def evaluate_auxiliary(
         preds = preds[:min_len]
         targets = targets[:min_len]
 
-        metrics[f'{task}_mae'] = float(mean_absolute_error(targets, preds))
-        metrics[f'{task}_rmse'] = float(np.sqrt(mean_squared_error(targets, preds)))
+        # Compute metrics
+        mae = mean_absolute_error(targets, preds)
+        rmse = np.sqrt(mean_squared_error(targets, preds))
 
-        # Correlation
-        if np.std(preds) > 0 and np.std(targets) > 0:
-            rho, _ = spearmanr(preds, targets)
-            if not np.isnan(rho):
-                metrics[f'{task}_spearman'] = float(rho)
+        # R² score
+        ss_res = np.sum((targets - preds) ** 2)
+        ss_tot = np.sum((targets - np.mean(targets)) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+        metrics[task] = {
+            'mae': float(mae),
+            'rmse': float(rmse),
+            'r2': float(r2)
+        }
 
     return metrics
 
@@ -348,20 +376,28 @@ def print_evaluation_report(
 
     if ranking_metrics is not None:
         print("\nPER-PLAN RANKING METRICS (using raw scores):")
-        print(f"  Kendall Tau:       {ranking_metrics['mean_kendall_tau']:.4f} "
-              f"(+/- {ranking_metrics['std_kendall_tau']:.4f})")
-        print(f"  Spearman Rho:      {ranking_metrics['mean_spearman_rho']:.4f} "
-              f"(+/- {ranking_metrics['std_spearman_rho']:.4f})")
-        print(f"  NDCG@5:            {ranking_metrics['mean_ndcg@5']:.4f} "
-              f"(+/- {ranking_metrics['std_ndcg@5']:.4f})")
-        print(f"  Top-1 Accuracy:    {ranking_metrics['top1_accuracy']:.4f}")
-        print(f"  Floor Plans:       {ranking_metrics['num_plans']:,}")
-        print(f"  Total Configs:     {ranking_metrics['num_configs']:,}")
+        print(f"  Overall Kendall Tau:      {ranking_metrics['kendall_tau']:.4f}")
+        print(f"  Overall Spearman R:       {ranking_metrics['spearman_r']:.4f}")
+        print(f"  Overall Pearson R:        {ranking_metrics['pearson_r']:.4f}")
+        print(f"  Mean Per-Plan Kendall:    {ranking_metrics['mean_per_plan_kendall']:.4f} "
+              f"(+/- {ranking_metrics['std_per_plan_kendall']:.4f})")
+        print(f"  Mean Per-Plan Spearman:   {ranking_metrics['mean_per_plan_spearman']:.4f} "
+              f"(+/- {ranking_metrics['std_per_plan_spearman']:.4f})")
+        print(f"  NDCG@10:                  {ranking_metrics['ndcg_at_10']:.4f}")
+        print(f"  Top-1 Accuracy:           {ranking_metrics['top1_accuracy']:.4f}")
+        print(f"  Floor Plans:              {ranking_metrics['num_plans']:,}")
+        print(f"  Total Configs:            {ranking_metrics['num_configs']:,}")
 
     if auxiliary_metrics is not None:
         print("\nAUXILIARY TASK METRICS:")
-        for key, value in auxiliary_metrics.items():
-            print(f"  {key}: {value:.4f}")
+        for task, metrics in auxiliary_metrics.items():
+            if isinstance(metrics, dict):
+                print(f"  {task}:")
+                print(f"    MAE:   {metrics['mae']:.4f}")
+                print(f"    RMSE:  {metrics['rmse']:.4f}")
+                print(f"    R²:    {metrics['r2']:.4f}")
+            else:
+                print(f"  {task}: {metrics:.4f}")
 
     print("\n" + "=" * 60)
 

@@ -4,8 +4,8 @@
 # Usage: python -m ml.ranking_v2.run_training --mode train --config ml/ranking_v2/configs/full.yaml
 
 # Data paths
-data_dir: combined_fast
-floor_plans_dir: combined_fast/floor_plans
+data_dir: combined_721
+floor_plans_dir: combined_721/floor_plans
 target_grid_size: [96, 128]
 
 # Grid encoding
@@ -69,11 +69,11 @@ gradient_accumulation_steps: 1
 learning_rate: 0.001
 warmup_epochs: 5
 epochs: 100
-early_stopping_patience: 15
-num_workers: 16
+early_stopping_patience: 100
+num_workers: 6
 
 # Checkpoint and logging
-checkpoint_dir: checkpoints/ranking_v2
+checkpoint_dir: checkpoints-ranking_v2-0111
 log_dir: logs/ranking_v2
 
 # Reproducibility

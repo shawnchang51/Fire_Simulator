@@ -110,6 +110,7 @@ class PairwiseDatasetV2(Dataset):
         hardness_indices: Indices sorted by hardness (hardest first)
         include_auxiliary: Whether to include auxiliary task labels
         auxiliary_tasks: List of auxiliary tasks to include
+        aux_lookup: Dict mapping (floor_plan_id, config_key, scenario_key) to aux values
     """
 
     def __init__(
@@ -166,6 +167,11 @@ class PairwiseDatasetV2(Dataset):
         else:
             self.scenario_stats = None
 
+        # Load auxiliary value lookup from simulation_results.jsonl if needed
+        self.aux_lookup = {}
+        if self.include_auxiliary:
+            self._load_aux_lookup(pairs_file)
+
         # NEW: Precompute hardness for hard negative mining
         self._precompute_hardness()
 
@@ -200,6 +206,61 @@ class PairwiseDatasetV2(Dataset):
                 }
 
         return plans
+
+    def _make_lookup_key(self, floor_plan_id: int, config: Dict, scenario: Dict) -> str:
+        """
+        Create a lookup key for auxiliary value matching.
+
+        Uses floor_plan_id + config hash + scenario hash to uniquely identify
+        a simulation result.
+        """
+        # Create deterministic string representations
+        config_str = json.dumps(config, sort_keys=True)
+        scenario_str = json.dumps(scenario, sort_keys=True)
+        return f"{floor_plan_id}|{config_str}|{scenario_str}"
+
+    def _load_aux_lookup(self, pairs_file: str) -> None:
+        """
+        Load auxiliary values from simulation_results.jsonl if pairs don't have them.
+
+        This allows the dataset to work with older pairs files that don't contain
+        auxiliary task labels (survival_rate_a, steps_a, avg_fire_damage_a, etc.).
+        """
+        # Check if first pair has auxiliary values
+        if self.pairs and 'survival_rate_a' in self.pairs[0]:
+            # Pairs already have auxiliary values, no need to load from simulation_results
+            return
+
+        # Derive simulation_results.jsonl path from pairs_file path
+        pairs_path = Path(pairs_file)
+        sim_results_file = pairs_path.parent / "simulation_results.jsonl"
+
+        if not sim_results_file.exists():
+            print(f"WARNING: simulation_results.jsonl not found at {sim_results_file}")
+            print("         Auxiliary task labels will use default values (may harm model performance)")
+            return
+
+        print(f"Loading auxiliary values from {sim_results_file}...")
+
+        # Build lookup dictionary
+        loaded_count = 0
+        with open(sim_results_file, 'r') as f:
+            for line in f:
+                if line.strip():
+                    record = json.loads(line)
+                    key = self._make_lookup_key(
+                        record['floor_plan_id'],
+                        record['config'],
+                        record['scenario']
+                    )
+                    self.aux_lookup[key] = {
+                        'survival_rate': record['survival_rate'],
+                        'steps': record['steps'],
+                        'avg_fire_damage': record['avg_fire_damage']
+                    }
+                    loaded_count += 1
+
+        print(f"  Loaded {loaded_count:,} auxiliary value entries for lookup")
 
     def _precompute_hardness(self):
         """
@@ -448,8 +509,8 @@ class PairwiseDatasetV2(Dataset):
         """
         Extract auxiliary task targets from pair data.
 
-        The auxiliary labels may be stored directly in pair data
-        or need to be computed from simulation results.
+        The auxiliary labels may be stored directly in pair data,
+        or looked up from simulation_results.jsonl via aux_lookup.
 
         Args:
             pair: Pair dictionary
@@ -460,19 +521,43 @@ class PairwiseDatasetV2(Dataset):
         """
         aux = {}
 
-        for task in self.auxiliary_tasks:
-            key = f'{task}_{suffix}'
-            if key in pair:
-                # Direct storage in pair data
-                aux[task] = pair[key]
-            elif task == 'survival_rate':
-                # Compute from score if not available
-                # Note: This is an approximation; real data should have this
-                aux[task] = pair.get(f'survival_rate_{suffix}', pair[f'score_{suffix}'])
-            elif task == 'steps':
-                aux[task] = pair.get(f'steps_{suffix}', 50.0)  # Default
-            elif task == 'avg_fire_damage':
-                aux[task] = pair.get(f'avg_fire_damage_{suffix}', 0.5)  # Default
+        # First check if values are directly in pair data
+        has_direct_values = f'survival_rate_{suffix}' in pair
+
+        if has_direct_values:
+            # Use values directly from pair data
+            for task in self.auxiliary_tasks:
+                key = f'{task}_{suffix}'
+                if key in pair:
+                    aux[task] = pair[key]
+        else:
+            # Look up from simulation_results.jsonl via aux_lookup
+            floor_plan_id = pair[f'floor_plan_id_{suffix}']
+            config = pair[f'config_{suffix}']
+            scenario = pair[f'scenario_{suffix}']
+            lookup_key = self._make_lookup_key(floor_plan_id, config, scenario)
+
+            if lookup_key in self.aux_lookup:
+                lookup_values = self.aux_lookup[lookup_key]
+                for task in self.auxiliary_tasks:
+                    if task in lookup_values:
+                        aux[task] = lookup_values[task]
+            else:
+                # Fallback: log warning once per missing key type
+                if not hasattr(self, '_aux_lookup_warned'):
+                    self._aux_lookup_warned = True
+                    print(f"WARNING: Could not find auxiliary values for some pairs in lookup")
+                    print(f"         Using score-based approximation for survival_rate (may be inaccurate)")
+
+                # Last resort fallbacks (less accurate than lookup)
+                for task in self.auxiliary_tasks:
+                    if task == 'survival_rate':
+                        # Use score as rough approximation (not ideal but better than arbitrary)
+                        aux[task] = pair[f'score_{suffix}']
+                    elif task == 'steps':
+                        aux[task] = 50.0
+                    elif task == 'avg_fire_damage':
+                        aux[task] = 0.5
 
         return aux
 

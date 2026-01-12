@@ -90,6 +90,14 @@ class PairwiseLabel:
     label: int  # 1 if A > B, 0 if B > A
     label_confidence: float  # How confident (based on score difference)
     pair_type: str  # 'within_plan', 'cross_plan', 'hard_negative'
+    
+    # Auxiliary task labels for multi-task learning
+    survival_rate_a: float = 0.0
+    survival_rate_b: float = 0.0
+    steps_a: int = 0
+    steps_b: int = 0
+    avg_fire_damage_a: float = 0.0
+    avg_fire_damage_b: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -103,7 +111,14 @@ class PairwiseLabel:
             'score_b': self.score_b,
             'label': self.label,
             'label_confidence': self.label_confidence,
-            'pair_type': self.pair_type
+            'pair_type': self.pair_type,
+            # Auxiliary task labels
+            'survival_rate_a': self.survival_rate_a,
+            'survival_rate_b': self.survival_rate_b,
+            'steps_a': self.steps_a,
+            'steps_b': self.steps_b,
+            'avg_fire_damage_a': self.avg_fire_damage_a,
+            'avg_fire_damage_b': self.avg_fire_damage_b,
         }
 
     @classmethod
@@ -437,7 +452,14 @@ class PairConstructor:
             score_b=result_b.score,
             label=label,
             label_confidence=confidence,
-            pair_type=f"{pair_type}_{selection_strategy}"
+            pair_type=f"{pair_type}_{selection_strategy}",
+            # Auxiliary task labels
+            survival_rate_a=result_a.survival_rate,
+            survival_rate_b=result_b.survival_rate,
+            steps_a=result_a.steps,
+            steps_b=result_b.steps,
+            avg_fire_damage_a=result_a.avg_fire_damage,
+            avg_fire_damage_b=result_b.avg_fire_damage,
         )
 
     def normalize_scores_by_plan(

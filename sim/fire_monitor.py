@@ -9,7 +9,7 @@ Perfect for science fair demonstrations and analysis.
 import json
 import time
 from typing import List, Dict, Any
-from fire_model_float import create_fire_model, EnvironmentalParameters
+from sim.fire_model_float import create_fire_model, EnvironmentalParameters
 
 
 class FireMonitor:

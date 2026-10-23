@@ -7,7 +7,7 @@ Interface between scoring network and simulator for pairwise comparison labeling
 
 import numpy as np
 from typing import Tuple, List, Dict, Any
-from fast_simulation import FastEvacuationSim, SimResult, batch_evaluate
+from sim.fast_simulation import FastEvacuationSim, SimResult, batch_evaluate
 
 class ScoringNetworkInterface:
     """
@@ -304,7 +304,7 @@ def generate_training_labels(simulator_interface,
 
     # Import candidate generator if available
     try:
-        from candidate_generator import generate_door_candidates
+        from datagen.candidate_generator import generate_door_candidates
     except ImportError:
         print("Warning: candidate_generator not found. Using dummy candidates.")
         def generate_door_candidates(floor_plan, num_candidates=50):

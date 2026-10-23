@@ -6,7 +6,7 @@ Computes histograms, percentiles, and statistical summaries for per-agent metric
 across multiple Monte Carlo simulation runs.
 
 Usage:
-    from distribution_analysis import compute_distributions
+    from sim.distribution_analysis import compute_distributions
 
     # agent_records is a list of dicts from all simulation runs
     distributions = compute_distributions(agent_records)

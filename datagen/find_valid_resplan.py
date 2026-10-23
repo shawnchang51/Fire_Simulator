@@ -2,7 +2,7 @@
 Find ResPlan floor plans with valid net_area (required for NPZ conversion).
 
 Usage:
-    python find_valid_resplan.py --min-area 50 --max-area 150 --limit 20
+    python -m datagen.find_valid_resplan --min-area 50 --max-area 150 --limit 20
 """
 
 import argparse
@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 # Add ResPlan utilities
-sys.path.insert(0, str(Path(__file__).parent / "ResPlan"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ResPlan"))
 from resplan_utils import normalize_keys
 
 

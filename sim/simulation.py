@@ -27,9 +27,9 @@ from d_star_lite.grid import GridWorld
 from d_star_lite.utils import stateNameToCoords
 from d_star_lite.d_star_lite import initDStarLite, moveAndRescan, set_OBS_VAL, scanForObstacles, computeShortestPath
 from dataclasses import dataclass
-from door_graph import build_door_graph, replan_path, find_door_id_by_position, update_room_edge_weights, DoorGraph
+from sim.door_graph import build_door_graph, replan_path, find_door_id_by_position, update_room_edge_weights, DoorGraph
 import json
-from fire_monitor import FireMonitor
+from sim.fire_monitor import FireMonitor
 from datetime import datetime
 import argparse
 import copy
@@ -37,14 +37,14 @@ import numpy as np
 from typing import Union
 
 try:
-    from pygame_visualizer import EvacuationVisualizer
+    from viz.pygame_visualizer import EvacuationVisualizer
     PYGAME_AVAILABLE = True
 except ImportError:
     PYGAME_AVAILABLE = False
     print("Pygame not available. Run 'pip install pygame' to enable graphical visualization.")
 
 try:
-    from matlab_visualizer import create_matlab_visualizer
+    from viz.matlab_visualizer import create_matlab_visualizer
     MATLAB_VISUALIZER_AVAILABLE = True
 except ImportError:
     MATLAB_VISUALIZER_AVAILABLE = False
@@ -823,12 +823,12 @@ class EvacuationSimulation():
 
         # Initialize fire model based on selected type
         if config.fire_model_type == "realistic":
-            from fire_model_realistic import create_fire_model
+            from sim.fire_model_realistic import create_fire_model
             self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols)
             if not silent:
                 print(f"Using REALISTIC fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
         elif config.fire_model_type == "aggressive":
-            from fire_model_aggressive import create_fire_model
+            from sim.fire_model_aggressive import create_fire_model
             self.model = create_fire_model(rows=config.map_rows, cols=config.map_cols)
             if not silent:
                 print(f"Using AGGRESSIVE fire model (update interval: every {config.fire_update_interval} timesteps = {config.fire_update_interval * config.timestep_duration}s)")
@@ -898,7 +898,7 @@ class EvacuationSimulation():
             raise
 
         # Initialize spatial index for knowledge sharing
-        from spatial_index import SpatialIndex
+        from sim.spatial_index import SpatialIndex
 
         # Auto-calculate sector_size if not provided
         # Ensure sector_size is at least 1 to avoid division by zero
@@ -1412,7 +1412,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    json_path = os.path.join(os.path.dirname(__file__), args.config)
+    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), args.config)
     with open(json_path, 'r', encoding='utf-8') as f:
         json_config = json.load(f)
     config = SimulationConfig.from_json(json_config)

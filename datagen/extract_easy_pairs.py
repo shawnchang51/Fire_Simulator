@@ -11,16 +11,16 @@ Hard pairs: Low confidence, small score difference (ambiguous)
 
 Usage:
     # Extract only easy pairs (default)
-    python extract_easy_pairs.py --difficulty easy
+    python -m datagen.extract_easy_pairs --difficulty easy
 
     # Extract mixed dataset with proportions
-    python extract_easy_pairs.py --difficulty mixed --easy-ratio 0.5 --medium-ratio 0.3 --hard-ratio 0.2
+    python -m datagen.extract_easy_pairs --difficulty mixed --easy-ratio 0.5 --medium-ratio 0.3 --hard-ratio 0.2
 
     # Custom thresholds
-    python extract_easy_pairs.py --difficulty easy --min-confidence 0.95 --min-score-diff 0.2
+    python -m datagen.extract_easy_pairs --difficulty easy --min-confidence 0.95 --min-score-diff 0.2
 
     # Specify output directory
-    python extract_easy_pairs.py --difficulty medium --output-dir combined_fast_medium
+    python -m datagen.extract_easy_pairs --difficulty medium --output-dir combined_fast_medium
 """
 import argparse
 import json
@@ -180,19 +180,19 @@ def parse_args():
         epilog="""
 Examples:
   # Easy pairs only (high confidence, large score difference)
-  python extract_easy_pairs.py --difficulty easy
+  python -m datagen.extract_easy_pairs --difficulty easy
 
   # Medium difficulty pairs
-  python extract_easy_pairs.py --difficulty medium
+  python -m datagen.extract_easy_pairs --difficulty medium
 
   # Hard pairs only (low confidence, small score difference)
-  python extract_easy_pairs.py --difficulty hard
+  python -m datagen.extract_easy_pairs --difficulty hard
 
   # Mixed dataset with custom proportions
-  python extract_easy_pairs.py --difficulty mixed --easy-ratio 0.5 --medium-ratio 0.3 --hard-ratio 0.2
+  python -m datagen.extract_easy_pairs --difficulty mixed --easy-ratio 0.5 --medium-ratio 0.3 --hard-ratio 0.2
 
   # Custom thresholds for what counts as "easy"
-  python extract_easy_pairs.py --difficulty easy --min-confidence 0.95 --min-score-diff 0.15
+  python -m datagen.extract_easy_pairs --difficulty easy --min-confidence 0.95 --min-score-diff 0.15
 """
     )
 

@@ -8,7 +8,7 @@ configuration is better by:
 3. Creating pairwise comparisons and evaluating ranking metrics
 
 Usage:
-    python evaluate_surrogate_ranking.py --checkpoint path/to/model.pt --data_dir combined_fast
+    python -m ml.evaluate_surrogate_ranking --checkpoint path/to/model.pt --data_dir combined_fast
 """
 
 import argparse
@@ -28,7 +28,7 @@ from tqdm import tqdm
 from ml.surrogate.model import FireSimulationSurrogate
 from ml.surrogate.dataset import FireSimulationDataset, get_floor_plan_ids_from_pairs
 from ml.surrogate.config import ModelConfig
-from pair_constructor import PairwiseLabel
+from datagen.pair_constructor import PairwiseLabel
 
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')

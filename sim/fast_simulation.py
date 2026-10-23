@@ -11,8 +11,8 @@ Performance: 10-20x faster than full EvacuationSimulation
 import numpy as np
 from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass
-from optimized_d_star_lite import OptimizedDStarLite, SharedGridDStarLite
-from fast_fire import FastFireModel, DeterministicFireModel, FireSpreadMode
+from sim.optimized_d_star_lite import OptimizedDStarLite, SharedGridDStarLite
+from sim.fast_fire import FastFireModel, DeterministicFireModel, FireSpreadMode
 
 @dataclass
 class FastAgent:

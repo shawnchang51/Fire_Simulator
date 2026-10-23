@@ -62,7 +62,7 @@ def visualize_floor_plan(filepath):
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
-        print("Usage: python view_floor_plan.py <npz_file>")
+        print("Usage: python -m viz.view_floor_plan <npz_file>")
         sys.exit(1)
 
     visualize_floor_plan(sys.argv[1])

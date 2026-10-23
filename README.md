@@ -65,7 +65,7 @@ pip install tqdm
 **Recommended**: Use the visual configurator for easy setup:
 
 ```bash
-python visual_configurator.py
+python -m viz.visual_configurator
 ```
 
 This provides an interactive interface to:
@@ -78,11 +78,11 @@ This provides an interactive interface to:
 Or run the simulation with default configuration:
 
 ```bash
-python simulation.py
+python -m sim.simulation
 ```
 
 This will:
-- Load configuration from [example_configuration.json](example_configuration.json)
+- Load configuration from `example_configuration.json` (repository root)
 - Initialize agents with predefined start positions and targets
 - Use realistic fire model (3-6 min to flashover, 0.1-0.2 m/s spread)
 - Launch pygame visualization (if available)
@@ -97,13 +97,11 @@ For statistical analysis and large-scale testing, use the **Monte Carlo simulati
 
 ```bash
 # Run 100 simulations in parallel (FASTEST - uses all CPU cores)
-python monte_carlo.py --runs 100 --parallel
+python -m sim.monte_carlo --runs 100 --parallel
 
 # Run 50 simulations in serial mode (for debugging)
-python monte_carlo.py --runs 50
+python -m sim.monte_carlo --runs 50
 
-# Benchmark serial vs parallel performance
-python benchmark_parallel.py
 ```
 
 ### Features
@@ -117,7 +115,7 @@ python benchmark_parallel.py
 ### Command-Line Options
 
 ```bash
-python monte_carlo.py [OPTIONS]
+python -m sim.monte_carlo [OPTIONS]
 ```
 
 | Option | Type | Default | Description |
@@ -134,25 +132,25 @@ python monte_carlo.py [OPTIONS]
 
 ```bash
 # Small test run (debugging)
-python monte_carlo.py --runs 10
+python -m sim.monte_carlo --runs 10
 
 # Medium run with parallel execution (recommended)
-python monte_carlo.py --runs 100 --parallel
+python -m sim.monte_carlo --runs 100 --parallel
 
 # Large-scale study with custom configuration
-python monte_carlo.py --config custom_map.json --runs 500 --parallel
+python -m sim.monte_carlo --config custom_map.json --runs 500 --parallel
 
 # Use specific number of processes
-python monte_carlo.py --runs 200 --parallel --processes 8
+python -m sim.monte_carlo --runs 200 --parallel --processes 8
 
 # Reproducible results with fixed seed
-python monte_carlo.py --runs 100 --parallel --seed 12345
+python -m sim.monte_carlo --runs 100 --parallel --seed 12345
 
 # Memory-efficient mode for large simulations
-python monte_carlo.py --runs 100 --parallel --no-full-results
+python -m sim.monte_carlo --runs 100 --parallel --no-full-results
 
 # Custom output directory
-python monte_carlo.py --runs 100 --parallel --output ./my_results
+python -m sim.monte_carlo --runs 100 --parallel --output ./my_results
 ```
 
 ### Performance
@@ -436,31 +434,44 @@ When `communication_range` > 0:
 
 ```
 Fire_Simulator/
-├── simulation.py              # Main simulation engine
-├── monte_carlo.py             # Monte Carlo simulations with parallel execution
-├── distribution_analysis.py   # Statistical analysis for Monte Carlo results
-├── visual_configurator.py     # Interactive map design tool
-├── fire_model_realistic.py    # Realistic fire model (default)
-├── fire_model_aggressive.py   # Aggressive fire model for stress-testing
-├── fire_model_float.py        # Original fire model
-├── fire_monitor.py            # Fire monitoring and data export
-├── door_graph.py              # Hierarchical pathfinding system
-├── spatial_index.py           # Spatial indexing for agent proximity
-├── pygame_visualizer.py       # Pygame graphical visualization
-├── matlab_visualizer.py       # MATLAB-style environmental visualization
+├── sim/                       # Simulation core
+│   ├── simulation.py          # Main simulation engine
+│   ├── monte_carlo.py         # Monte Carlo simulations with parallel execution
+│   ├── distribution_analysis.py # Statistical analysis for Monte Carlo results
+│   ├── fire_model_realistic.py  # Realistic fire model (default)
+│   ├── fire_model_aggressive.py # Aggressive fire model for stress-testing
+│   ├── fire_model_float.py    # Original fire model
+│   ├── fire_monitor.py        # Fire monitoring and data export
+│   ├── door_graph.py          # Hierarchical pathfinding system
+│   ├── spatial_index.py       # Spatial indexing for agent proximity
+│   ├── fast_simulation.py, fast_fire.py, optimized_d_star_lite.py  # Phase 2 fast path
+│   ├── shared_terrain.py, rl_simulation.py
 ├── d_star_lite/               # D* Lite pathfinding algorithm
-│   ├── d_star_lite.py        # Core algorithm
-│   ├── grid.py               # GridWorld graph
-│   ├── graph.py              # Base graph structure
-│   └── utils.py              # Utilities
-├── example_configuration.json # Example configuration file
+├── datagen/                   # Training-data generation and pairing pipeline
+│   ├── generate_training_data_v5.py, run_pairing_phase.py, combine_and_pair_fast.py
+│   ├── candidate_generator.py, pair_constructor.py, data_validator.py
+│   └── resplan_loader.py, resplit_*.py, extract_easy_pairs.py, ...
+├── viz/                       # Visualization and tooling
+│   ├── pygame_visualizer.py   # Pygame graphical visualization
+│   ├── matlab_visualizer.py   # MATLAB-style environmental visualization
+│   ├── visual_configurator.py # Interactive map design tool
+│   └── npz_visualizer.py, view_floor_plan.py, run_phase2_visual.py
+├── ml/                        # Surrogate / ranking models (surrogate, ranking, ranking_v2)
+│   └── evaluate_surrogate_ranking.py
+├── models/                    # Trained checkpoints (surrogate/, ranking/)
+├── datasets/                  # Packaged datasets (easy_no_plan.zip)
+├── ResPlan/                   # ResPlan floor-plan data and helpers
 └── requirements.txt           # Python dependencies
 ```
+
+> All entry points are run from the repository root as modules, e.g.
+> `python -m sim.simulation`, `python -m sim.monte_carlo --runs 100 --parallel`,
+> `python -m viz.visual_configurator`.
 
 ## Additional Resources
 
 - **[CLAUDE.md](CLAUDE.md)**: Comprehensive developer guide with architecture details
-- **Example Configuration**: See [example_configuration.json](example_configuration.json) for a complete configuration
+- **Example Configuration**: `example_configuration.json` (place it in the repository root; `*.json` is git-ignored except this file)
 - **Data Output**: Simulation results automatically saved to `./data/` directory
 - **Monte Carlo Results**: Parallel simulation results in `./monte_carlo_results/`
 

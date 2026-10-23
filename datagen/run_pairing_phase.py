@@ -7,7 +7,7 @@ reconstructs the data structures, and runs Phase 3-4:
 - Phase 4: Validate and split into train/val/test
 
 Usage:
-    python run_pairing_phase.py --input-file combined/simulation_results.jsonl --output-dir final_output --config-json combined/config.json
+    python -m datagen.run_pairing_phase --input-file combined/simulation_results.jsonl --output-dir final_output --config-json combined/config.json
 """
 
 import os
@@ -23,14 +23,14 @@ from collections import defaultdict
 import numpy as np
 
 # Import components from generate_training_data_v5
-from generate_training_data_v5 import (
+from datagen.generate_training_data_v5 import (
     GenerationConfigV5,
     HierarchicalSimulationResult,
     HierarchicalPairConstructor,
     NumpyEncoder
 )
-from pair_constructor import PairConstructor, PairwiseLabel, PairWriter
-from data_validator import DataValidator, create_dataset_splits
+from datagen.pair_constructor import PairConstructor, PairwiseLabel, PairWriter
+from datagen.data_validator import DataValidator, create_dataset_splits
 
 
 logging.basicConfig(

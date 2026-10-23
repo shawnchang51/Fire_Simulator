@@ -40,7 +40,7 @@ except ImportError:
     USING_ORJSON = False
 
 # Import from generation script
-from generate_training_data_v5 import (
+from datagen.generate_training_data_v5 import (
     GenerationConfigV5,
     HierarchicalSimulationResult,
     PairConstructor,

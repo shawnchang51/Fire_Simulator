@@ -1716,7 +1716,7 @@ class VisualConfigurator:
 
             # Import and run simulation
             try:
-                from simulation import SimulationConfig, EvacuationSimulation
+                from sim.simulation import SimulationConfig, EvacuationSimulation
                 import json
 
                 with open(temp_config, 'r', encoding='utf-8') as f:

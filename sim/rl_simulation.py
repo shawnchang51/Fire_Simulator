@@ -9,7 +9,7 @@ Zero-overhead simulation for RL training with:
 - Clean numpy-based interface
 """
 
-from simulation import EvacuationSimulation, SimulationConfig
+from sim.simulation import EvacuationSimulation, SimulationConfig
 import numpy as np
 import json
 

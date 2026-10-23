@@ -127,15 +127,15 @@ def compute_scenario_hash(scenario: Dict[str, Any]) -> str:
     return hashlib.md5(canonical.encode()).hexdigest()[:12]
 
 # Local imports
-from resplan_loader import (
+from datagen.resplan_loader import (
     ResPlanLoader,
     ResPlanFloorPlan,
     apply_door_config,
     get_resplan_door_config
 )
-from candidate_generator import CandidateGenerator
-from pair_constructor import PairConstructor, SimulationResult, PairwiseLabel, PairWriter
-from data_validator import DataValidator, create_dataset_splits
+from datagen.candidate_generator import CandidateGenerator
+from datagen.pair_constructor import PairConstructor, SimulationResult, PairwiseLabel, PairWriter
+from datagen.data_validator import DataValidator, create_dataset_splits
 
 
 logging.basicConfig(
@@ -232,7 +232,7 @@ def evaluate_door_config_with_scenario(args: Tuple) -> Dict[str, Any]:
     scenario_hash = compute_scenario_hash(scenario)
 
     try:
-        from fast_simulation import FastEvacuationSim
+        from sim.fast_simulation import FastEvacuationSim
 
         # Apply door configuration to base grid (open the doors)
         grid = apply_door_config(base_grid, door_config)
@@ -337,7 +337,7 @@ def evaluate_door_config_monte_carlo_v5(args: Tuple) -> Dict[str, Any]:
     base_grid = np.array(base_grid_data, dtype=np.float32)
 
     try:
-        from fast_simulation import FastEvacuationSim
+        from sim.fast_simulation import FastEvacuationSim
 
         # Apply door configuration to base grid (open the doors)
         grid = apply_door_config(base_grid, door_config)

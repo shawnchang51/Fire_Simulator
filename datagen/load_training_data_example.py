@@ -6,7 +6,7 @@ This shows how to load floor plan grids + door/exit configs + scenarios together
 
 import json
 import numpy as np
-from resplan_loader import ResPlanLoader
+from datagen.resplan_loader import ResPlanLoader
 
 def load_complete_training_data(pairs_file: str, resplan_pkl: str):
     """

@@ -14,33 +14,33 @@ visualization instead, which shows fire spread and agent movement.
 
 Usage:
     # Run with pygame visualization (default)
-    python run_phase2_visual.py
+    python -m viz.run_phase2_visual
 
     # With custom configuration
-    python run_phase2_visual.py --config example_configuration.json
+    python -m viz.run_phase2_visual --config example_configuration.json
 
     # Run faster with reduced fire update interval
-    python run_phase2_visual.py --fire-interval 8
+    python -m viz.run_phase2_visual --fire-interval 8
 """
 
 import argparse
 import json
 import numpy as np
 from pathlib import Path
-from simulation import SimulationConfig
+from sim.simulation import SimulationConfig
 from d_star_lite.utils import stateNameToCoords
-from fast_simulation import FastEvacuationSim, FastAgent
+from sim.fast_simulation import FastEvacuationSim, FastAgent
 import time
 
 try:
-    from pygame_visualizer import EvacuationVisualizer
+    from viz.pygame_visualizer import EvacuationVisualizer
     PYGAME_AVAILABLE = True
 except ImportError:
     PYGAME_AVAILABLE = False
     print("Pygame not available. Run 'pip install pygame' to enable graphical visualization.")
 
 try:
-    from matlab_visualizer import create_matlab_visualizer
+    from viz.matlab_visualizer import create_matlab_visualizer
     MATLAB_VISUALIZER_AVAILABLE = True
 except ImportError:
     MATLAB_VISUALIZER_AVAILABLE = False
@@ -329,7 +329,7 @@ class VisualPhase2Wrapper:
         avg_fire_damage = sum(fire_exposures) / len(fire_exposures) if fire_exposures else 0.0
 
         # Create result
-        from fast_simulation import SimResult
+        from sim.fast_simulation import SimResult
         result = SimResult(
             steps=self.steps,
             evacuated=evacuated,

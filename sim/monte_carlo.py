@@ -16,16 +16,16 @@ Features:
 
 Usage:
     # Serial mode (10 runs)
-    python monte_carlo.py --runs 10
+    python -m sim.monte_carlo --runs 10
 
     # Parallel mode using all CPU cores
-    python monte_carlo.py --runs 100 --parallel
+    python -m sim.monte_carlo --runs 100 --parallel
 
     # Parallel mode with specific number of processes and custom output directory
-    python monte_carlo.py --runs 50 --parallel --processes 4 --output ./my_results
+    python -m sim.monte_carlo --runs 50 --parallel --processes 4 --output ./my_results
 
     # Memory-efficient mode for large simulations (600+ agents)
-    python monte_carlo.py --runs 100 --parallel --no-full-results
+    python -m sim.monte_carlo --runs 100 --parallel --no-full-results
 
 Output:
     Creates ./monte_carlo_results/{config_name}_{timestamp}/
@@ -42,9 +42,9 @@ Functions:
     save_comprehensive_results(config, results, statistics, ...): Save results to files
 """
 
-from simulation import EvacuationSimulation, SimulationConfig
+from sim.simulation import EvacuationSimulation, SimulationConfig
 from d_star_lite.utils import coordsToStateName, stateNameToCoords
-from distribution_analysis import compute_distributions, compute_per_run_distributions, print_distribution_summary
+from sim.distribution_analysis import compute_distributions, compute_per_run_distributions, print_distribution_summary
 import argparse, json, os
 import random
 import numpy as np
@@ -59,7 +59,7 @@ import time
 
 # Phase 2 optimizations (optional, fallback to original if not available)
 try:
-    from fast_simulation import FastEvacuationSim, evaluate_floor_plan
+    from sim.fast_simulation import FastEvacuationSim, evaluate_floor_plan
     PHASE2_AVAILABLE = True
 except ImportError:
     PHASE2_AVAILABLE = False
@@ -232,7 +232,7 @@ def compute_reachable_positions(config: SimulationConfig) -> list:
 
     # If using door graphs, validate that agents can reach exits
     if config.door_configs:
-        from door_graph import build_door_graph, replan_path
+        from sim.door_graph import build_door_graph, replan_path
 
         print(f"Computing reachable positions (one-time operation)...")
         print(f"  Testing {len(valid_positions)} positions for exit reachability...")
@@ -896,28 +896,28 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   # Run 10 simulations in serial mode:
-  python monte_carlo.py --runs 10
+  python -m sim.monte_carlo --runs 10
 
   # Run 50 simulations in parallel using all CPU cores:
-  python monte_carlo.py --runs 50 --parallel
+  python -m sim.monte_carlo --runs 50 --parallel
 
   # Run 100 simulations with Phase 2 optimization (10-20x faster):
-  python monte_carlo.py --runs 100 --parallel --phase2
+  python -m sim.monte_carlo --runs 100 --parallel --phase2
 
   # Run 100 simulations in parallel using 4 processes:
-  python monte_carlo.py --runs 100 --parallel --processes 4
+  python -m sim.monte_carlo --runs 100 --parallel --processes 4
 
   # Use custom configuration file:
-  python monte_carlo.py --config my_config.json --runs 20 --parallel
+  python -m sim.monte_carlo --config my_config.json --runs 20 --parallel
 
   # Specify custom output directory:
-  python monte_carlo.py --runs 50 --parallel --output ./my_results
+  python -m sim.monte_carlo --runs 50 --parallel --output ./my_results
 
   # Memory-efficient mode for large simulations (600+ agents):
-  python monte_carlo.py --runs 100 --parallel --no-full-results
+  python -m sim.monte_carlo --runs 100 --parallel --no-full-results
 
   # Phase 2 + memory-efficient mode (maximum performance):
-  python monte_carlo.py --runs 1000 --parallel --phase2 --no-full-results
+  python -m sim.monte_carlo --runs 1000 --parallel --phase2 --no-full-results
 
 Output:
   Creates ./monte_carlo_results/{config_name}_{timestamp}/
@@ -985,7 +985,7 @@ Output:
         print("To use Phase 2: ensure fast_simulation.py, optimized_d_star_lite.py, and fast_fire.py are in the directory.\n")
 
     # Load configuration
-    json_path = os.path.join(os.path.dirname(__file__), args.config)
+    json_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), args.config)
     with open(json_path, 'r', encoding='utf-8') as f:
         json_config = json.load(f)
 

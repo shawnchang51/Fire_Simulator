@@ -1,6 +1,6 @@
 """NPZ Visualizer
 
-Usage: python npz_visualizer.py path/to/file.npz [--key KEY] [--list] [--save out.png]
+Usage: python -m viz.npz_visualizer path/to/file.npz [--key KEY] [--list] [--save out.png]
 
 Simple tool to list arrays inside a .npz and display one using matplotlib.
 """

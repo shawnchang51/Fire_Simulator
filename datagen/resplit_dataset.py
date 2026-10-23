@@ -5,8 +5,8 @@
 """
 
 import json
-from data_validator import create_dataset_splits, DataValidator
-from pair_constructor import PairWriter, PairwiseLabel
+from datagen.data_validator import create_dataset_splits, DataValidator
+from datagen.pair_constructor import PairWriter, PairwiseLabel
 
 
 def resplit_from_raw_pairs(

@@ -430,6 +430,17 @@ When `communication_range` > 0:
 
 **Fire spreads too fast/slow**: Adjust `fire_model_type` or `fire_update_interval` in configuration
 
+## Large Files (Git LFS)
+
+`*.pt` model checkpoints and `*.zip` datasets (`models/`, `datasets/`, `ResPlan/ResPlan.zip`) are stored with [Git LFS](https://git-lfs.com/). Install it once before cloning:
+
+```bash
+git lfs install
+git clone https://github.com/shawnchang51/Fire_Simulator
+# or, in an existing clone:
+git lfs pull
+```
+
 ## Project Structure
 
 ```
